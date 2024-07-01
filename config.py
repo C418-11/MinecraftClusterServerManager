@@ -2,18 +2,19 @@
 # cython: language_level = 3
 
 __author__ = "C418____11 <553515788@qq.com>"
-__version__ = "0.0.1Dev"
+__version__ = "0.0.1"
 
-import os.path
-from typing import Any
-from typing import Self
 import functools
-from copy import deepcopy
-from typing import Type
-import yaml
-from typing import Callable
-from abc import ABC
 import inspect
+import os.path
+from abc import ABC
+from copy import deepcopy
+from typing import Any
+from typing import Callable
+from typing import Self
+from typing import Type
+
+import yaml
 
 
 class RequiredKeyNotFoundError(KeyError):
@@ -116,6 +117,15 @@ class ConfigData:
 
         return self._process_path(path, checker, lambda *_: True)
 
+    def keys(self):
+        return self._data.keys()
+
+    def values(self):
+        return [(ConfigData(x) if type(x) is dict else x) for x in self._data.values()]
+
+    def items(self):
+        return [(k, (ConfigData(v) if type(v) is dict else v)) for k, v in self._data.items()]
+
     def __getitem__(self, key):
         return self.getPathValue(key)
 
@@ -127,6 +137,9 @@ class ConfigData:
 
     def __contains__(self, key):
         return self.hasPath(key)
+
+    def __getattr__(self, item):
+        return ConfigData(self._data[item]) if type(self._data[item]) is dict else self._data[item]
 
     def __repr__(self):
         data_str = f"{self._data!r}"[1:-1]
@@ -162,7 +175,7 @@ class RequiredKey:
             _type = default
             if type(default) is not type:
                 _type = type(default)
-                value = default
+                value = deepcopy(default)
                 try:
                     value = data.getPathValue(path)
                 except RequiredKeyNotFoundError:
@@ -406,6 +419,9 @@ class RequireConfigDecorator:
 
         self._allow_create = allow_create
 
+    def checkConfig(self):
+        return self._required.filter(self._config.data, allow_create=self._allow_create)
+
     def __call__(self, func):
         if _is_method(func):
             processor = self._method_processor
@@ -427,7 +443,6 @@ class RequireConfigDecorator:
 
 DefaultConfigPool = ConfigPool()
 requireConfig = DefaultConfigPool.requireConfig
-
 
 __all__ = (
     "RequiredKeyNotFoundError",
