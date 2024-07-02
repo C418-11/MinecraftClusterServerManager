@@ -14,7 +14,6 @@ AttributeError: partially initialized module 'command_tools.types_' has no attri
 to a circular import)
 """
 
-
 import pickle
 from typing import Union
 from typing import Tuple

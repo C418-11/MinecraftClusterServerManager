@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 __author__ = "C418____11 <553515788@qq.com>"
 
-from functools import wraps
 from functools import update_wrapper
-from typing import Union
+from functools import wraps
 from typing import Callable
+from typing import Union
 
 from . import errors
 from . import types

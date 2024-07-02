@@ -10,7 +10,7 @@ import os.path
 from abc import ABC
 from copy import deepcopy
 from types import UnionType
-from typing import Any, Union
+from typing import Any
 from typing import Callable
 from typing import Self
 from typing import Type

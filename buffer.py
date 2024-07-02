@@ -4,9 +4,8 @@
 __author__ = "C418____11 <553515788@qq.com>"
 __version__ = "0.0.1Dev"
 
-
-from collections import deque
 import threading
+from collections import deque
 from typing import Callable
 
 
