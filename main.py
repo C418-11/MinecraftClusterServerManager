@@ -4,24 +4,22 @@
 __author__ = "C418____11 <553515788@qq.com>"
 __version__ = "0.0.1Dev"
 
-import signal
+import codecs
+import subprocess
 import sys
+import threading
 from copy import deepcopy
+from platform import system
 from typing import Callable
 
-from config import requireConfig
-from config import DefaultConfigPool
-from config import ConfigData
-from platform import system
+from buffer import StringBuffer
 from command_tools import Command
-from command_tools import RunCommand
 from command_tools import CommandNotFindError
 from command_tools import DefaultCommandList
-from buffer import StringBuffer
-import codecs
-import threading
-import subprocess
-
+from command_tools import RunCommand
+from config import ConfigData
+from config import DefaultConfigPool
+from config import requireConfig
 
 default_config = {
     "process": {
@@ -30,7 +28,6 @@ default_config = {
         "Register": {},
     }
 }
-
 
 if system() == "Windows":
     default_config["process"] |= {
