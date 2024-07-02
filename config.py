@@ -9,7 +9,8 @@ import inspect
 import os.path
 from abc import ABC
 from copy import deepcopy
-from typing import Any
+from types import UnionType
+from typing import Any, Union
 from typing import Callable
 from typing import Self
 from typing import Type
@@ -107,6 +108,7 @@ class ConfigData:
 
             if last_path is None:
                 del now_data[now_path]
+                return True
 
         self._process_path(path, checker, lambda *_: None)
 
@@ -116,6 +118,12 @@ class ConfigData:
                 return False
 
         return self._process_path(path, checker, lambda *_: True)
+
+    def get(self, path, default=None):
+        try:
+            return self.getPathValue(path)
+        except RequiredKeyNotFoundError:
+            return default
 
     def keys(self):
         return self._data.keys()
@@ -141,6 +149,9 @@ class ConfigData:
     def __getattr__(self, item):
         return ConfigData(self._data[item]) if type(self._data[item]) is dict else self._data[item]
 
+    def __iter__(self):
+        return iter(self._data)
+
     def __repr__(self):
         data_str = f"{self._data!r}"[1:-1]
 
@@ -152,6 +163,7 @@ class ConfigData:
 
 class RequiredKey:
     AllowType = {str, int, float, bool, list, dict, tuple}
+    TypingType = {UnionType}
 
     def __init__(self, paths: list[str] | dict[str, Any]):
 
@@ -173,7 +185,7 @@ class RequiredKey:
         for path, default in self._paths.items():
 
             _type = default
-            if type(default) is not type:
+            if (type(default) not in self.TypingType) and (type(default) is not type):
                 _type = type(default)
                 value = deepcopy(default)
                 try:
@@ -187,7 +199,7 @@ class RequiredKey:
             if (_type is dict) and isinstance(value, ConfigData):
                 value = value.data
 
-            if type(value) is not _type:
+            if not isinstance(value, _type):
                 raise TypeError(f"Path {path} is not {_type.__name__}")
 
             result[path] = value

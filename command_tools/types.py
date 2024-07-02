@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 __author__ = "C418____11 <553515788@qq.com>"
 
+from copy import deepcopy
+
 """
 You must import command_tools.errors first !!!
 
@@ -14,11 +16,12 @@ to a circular import)
 
 
 import pickle
-from typing import Union, Tuple
+from typing import Union
+from typing import Tuple
 
 import numbers
 
-from command_tools import errors
+from . import errors
 
 
 class CommandList:
@@ -33,19 +36,29 @@ class CommandList:
         if list_ is None:
             list_ = {}
 
-        self.list_ = list_
+        self._list = list_
+
+    @property
+    def data(self) -> dict:
+        return deepcopy(self._list)
 
     def keys(self):
-        return self.list_.keys()
+        return self._list.keys()
 
     def values(self):
-        return self.list_.values()
+        return self._list.values()
+
+    def items(self):
+        return self._list.items()
 
     def __getitem__(self, item):
-        return self.list_[item]
+        return self._list[item]
 
     def __setitem__(self, key, value):
-        self.list_[key] = value
+        self._list[key] = value
+
+    def __iter__(self):
+        return iter(self._list)
 
 
 class LeadChar:

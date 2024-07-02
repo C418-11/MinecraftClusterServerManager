@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 __author__ = "C418____11 <553515788@qq.com>"
 
-from functools import wraps, update_wrapper
+from functools import wraps
+from functools import update_wrapper
 from typing import Union
+from typing import Callable
 
-from command_tools import errors
-from command_tools import types
+from . import errors
+from . import types
 
-default_command_list = types.CommandList()
+DefaultCommandList = types.CommandList()
 _default_lead_char = types.LeadChar(
     ['!', '！',
      '#',
@@ -29,10 +31,11 @@ class Command:
     def __init__(self, name: Union[str, float],
                  op_level: Union[float, types.OperateLevel] = 0,
                  *,
-                 args_maker: callable = default_cut_rule,
+                 args_maker: Callable = default_cut_rule,
                  cut_rule=default_cut_rule,
                  lead_char: Union[types.LeadChar, None] = None,
-                 help_str: str = "Not defined!",
+                 description: str = "Not defined!",
+                 usage: str = "Not defined!",
                  cmd_list: Union[types.CommandList, None] = None):
 
         """
@@ -44,25 +47,29 @@ class Command:
         :param args_maker: Callable: 对参数修改的函数
         :param cut_rule: Callable: 裁剪规则
         :param lead_char: Union[LeadChar, None]: 领导符
-        :param help_str: str: 指令的帮助文档
+        :param description: str: 指令的描述
+        :param usage: str: 指令的用法 (如果第一个字符是%, 则自动添加指令名)
         :param cmd_list: CommandList[List]: 指令注册表
         """
 
         if lead_char is None:
             lead_char = _default_lead_char
         if cmd_list is None:
-            cmd_list = default_command_list
+            cmd_list = DefaultCommandList
+        if usage.startswith("%"):
+            usage = usage.replace("%", f"{name}", 1)
 
         self._name = name
         self._op_level = op_level
         self._args_maker = args_maker
         self._cut_rule = cut_rule
         self._lead_char = lead_char
-        self._help_str = help_str
+        self._help_str = description
         self._cmd_list = cmd_list
         self._append_to_list = False
 
-        self._data = {"help": self._help_str,
+        self._data = {"description": self._help_str,
+                      "usage": usage,
                       "lead_char": self._lead_char,
                       "op_level": self._op_level,
                       "cut_rule": self._cut_rule,
@@ -95,11 +102,11 @@ def default_args_unpacker(*args, func, **kwargs):
 
 class RunCommand:
     def __init__(self,
-                 args_maker: callable = default_cut_rule,
+                 args_maker: Callable = default_cut_rule,
                  cut_rule=default_cut_rule,
                  cmd_list: Union[types.CommandList, None] = None,
                  lead_char: Union[types.LeadChar, None] = None,
-                 args_unpacker: callable = None):
+                 args_unpacker: Callable = None):
 
         """
 
@@ -111,7 +118,7 @@ class RunCommand:
         """
 
         if cmd_list is None:
-            cmd_list = default_command_list
+            cmd_list = DefaultCommandList
         if lead_char is None:
             lead_char = _default_lead_char
         if args_unpacker is None:
@@ -223,3 +230,11 @@ class RunCommand:
         """
 
         return self.run_by_str(string=string, op_level=op_level, *args, **kwargs)
+
+
+__all__ = (
+    "Command",
+    "RunCommand",
+
+    "DefaultCommandList",
+)
