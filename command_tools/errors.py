@@ -37,16 +37,16 @@ class OperateLevelAlreadyExistError(OperateLevelException):
         return f"Operate level {self.level_name} already exists!"
 
 
-class CommandException(Exception):
-    pass
-
-
-class CommandAlreadyExistError(CommandException):
+class CommandAlreadyExistError(Exception):
     def __init__(self, *, command_name: str = None):
         self.command_name = command_name
 
     def __str__(self):
         return f"Command {self.command_name} already exists!"
+
+
+class CommandException(Exception):
+    pass
 
 
 class CommandNotFindError(CommandException):
