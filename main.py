@@ -44,7 +44,10 @@ if system() == "Windows":
             "cmd": {
                 "description": "windows command line",
                 "cmd": "cmd",
-                "end": "exit"
+                "end": "exit",
+                "Encoding": {
+                    "stdin": "gbk"
+                }
             },
             "powershell": {
                 "description": "PowerShell",
