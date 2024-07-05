@@ -166,7 +166,7 @@ class SubprocessService:
 
             self._stdout_buffer.write(txt)
 
-        if not (self._process.poll() is None):
+        if self._process.poll() is not None:
             self._running = False
             self._process = None
 
@@ -180,7 +180,7 @@ class SubprocessService:
         return self._stdout_buffer.isRegistered(callback)
 
     def sendStdin(self, txt: str) -> None:
-        if not (self._process.poll() is None):
+        if self._process.poll() is not None:
             raise RuntimeError("Process not running")
 
         self._process.stdin.write(txt.encode(self._stdin_encoding))
@@ -221,10 +221,15 @@ class SubprocessService:
 
     def join(self, timeout: float | None = None):
         if self._process is not None:
-            self._process.wait(timeout)
+            try:
+                self._process.wait(timeout)
+            except subprocess.TimeoutExpired as e:
+                raise TimeoutError(f"Process {self._name} did not end within {timeout} seconds") from e
 
         if self._thread is not None:
             self._thread.join(timeout)
+            if self._thread.is_alive():
+                raise TimeoutError(f"Thread {self._thread.name} did not join within {timeout} seconds")
 
     def is_alive(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -298,33 +303,36 @@ def start_processes(config: ConfigData):
 
 running: bool = True
 stopping: dict[str, bool] = {}
+force_to_stop: bool = False
 
 
 @Command(
     "q",
     description="Quits the program",
-    usage="% [-e 'Use end command to terminate program instead of trying to kill process']\n"
-          " [--t 'Timeout in seconds to wait for process to terminate (0.0 to 120.0)']",
+    usage="%"
+          "\n├ [-e 'Use end command to terminate program instead of trying to kill process]"
+          "\n└ [--t 'Timeout in seconds to wait for process to terminate (default 5, range 0 to 15 minutes)]"
 )
 def _quit(_cmd, ca_t: float = 5, cf_e: bool = False, *_):
 
     global running, stopping
-    running = False
 
     timeout = float(ca_t)
     if timeout <= 0:
-        raise ValueError("Timeout must be greater than 0")
-    if timeout > 120:
-        raise ValueError("Timeout must be less than or equal to 120")
+        print(f"Timeout must be positive", file=STDOUT_LIGHTYELLOW)
+        return
+    if timeout > 60 * 15:
+        print(f"Timeout must be less than 15 minutes", file=STDOUT_LIGHTYELLOW)
+        return
 
     join_threads: list[threading.Thread] = []
 
-    def _join(p):
-        p.join(timeout)
-        if p.is_alive():
-            print(f"Process {p.name} did not terminate within {timeout} seconds", file=STDOUT_YELLOW)
-        else:
+    def _join(p: SubprocessService):
+        try:
+            p.join(timeout)
             print(f"Process {p.name} terminated", file=STDOUT_LIGHTGREEN)
+        except TimeoutError:
+            print(f"Process {p.name} did not terminate within {timeout} seconds", file=STDOUT_LIGHTYELLOW)
 
     for process in processes.values():
         if not process.running:
@@ -350,9 +358,10 @@ def _quit(_cmd, ca_t: float = 5, cf_e: bool = False, *_):
     stopping["cmd.q.join_all"] = True
 
     threading.Thread(target=_join_all, daemon=True).start()
+    running = False
 
 
-@Command("s", description="Starts the specified process", usage="% ('*', '<process name> ...')")
+@Command("s", description="Starts the specified process", usage="% <'*' | process name> ...")
 def _start(cmd: list[str], *_):
     if '*' in cmd:
         cmd = processes.keys()
@@ -370,7 +379,7 @@ def _start(cmd: list[str], *_):
         print(f"Started process {name}", file=STDOUT_LIGHTGREEN)
 
 
-@Command("e", description="Ends the specified process", usage="% ('*', '<process name> ...')")
+@Command("e", description="Ends the specified process", usage="% <'*' | process name> ...")
 def _end(cmd: list[str], *_):
     if '*' in cmd:
         cmd = processes.keys()
@@ -388,7 +397,7 @@ def _end(cmd: list[str], *_):
         print(f"Ended process {name}", file=STDOUT_LIGHTGREEN)
 
 
-@Command("k", description="Kills the specified process", usage="% ('*', '<process name> ...')")
+@Command("k", description="Kills the specified process", usage="% <'*' | process name> ...")
 def _kill(cmd: list[str], *_):
     if '*' in cmd:
         cmd = processes.keys()
@@ -465,7 +474,7 @@ def _build_list(*titles):
     return _add_line, _get_lines
 
 
-@Command("cp", description="Connects the pipe to the specified process", usage="% ('*', '<process name> ...')")
+@Command("cp", description="Connects the pipe to the specified process", usage="% <'*' | <process name> ...")
 def _connect_pipe(cmd: list[str], *_):
     if '*' in cmd:
         cmd = processes.keys()
@@ -484,7 +493,7 @@ def _connect_pipe(cmd: list[str], *_):
         p.connectStdout(_print_wrapper)
 
 
-@Command("dp", description="Disconnects the pipe from the specified process", usage="% ('*', '<process name> ...')")
+@Command("dp", description="Disconnects the pipe from the specified process", usage="% <'*' | <process name> ...")
 def _disconnect_pipe(cmd: list[str], *_):
     if '*' in cmd:
         cmd = processes.keys()
@@ -538,15 +547,12 @@ def _registered_pipe(cmd_ls: list[str], *_):
 @Command(
     "st",
     description="Sends text to the specified process",
-    usage="% <process name> ... ('\\', '|', ',', '/') [text] ..."
+    usage="% <process name> ..."
+          "\n└ [--t 'Text to send]"
 )
-def _send_text(cmd: list[str], *_):
+def _send_text(cmd: list[str], ca_t: str = '', *_):
     process_to_send = []
-    for i, name in enumerate(cmd, start=1):
-        if name in {'\\', '|', ',', '/'}:
-            cmd = cmd[i:]
-            break
-
+    for name in set(cmd):
         p = processes.get(name)
         if p is None:
             print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
@@ -554,14 +560,13 @@ def _send_text(cmd: list[str], *_):
 
         process_to_send.append(p)
 
-    txt = ' '.join(cmd)
     for p in process_to_send:
         if not p.running:
             print(f"Process {p.name} is not running", file=STDOUT_LIGHTYELLOW)
             continue
 
-        print(f"Sent to process {p.name}: {txt}", file=STDOUT_LIGHTGREEN)
-        p.sendStdin(f"{txt}\n")
+        print(f"Sent to process {p.name}: {ca_t}", file=STDOUT_LIGHTGREEN)
+        p.sendStdin(f"{ca_t}\n")
 
 
 @Command("ps", description="Displays the status of the specified process", usage="% [process name] ...")
@@ -629,10 +634,9 @@ def _save_config(*_):
 
 
 @Command("db", description="Debug command", usage="% ...")
-def _debug(*args, cf_c: bool = False, **kwargs):
-    kwargs["cf_c"] = cf_c
+def _debug(*args, **kwargs):
     print(args, kwargs, file=STDOUT_LIGHTMAGENTA)
-    if cf_c:
+    if kwargs.get("cf_c"):
         colors = [
             STDOUT_RED,
             STDOUT_GREEN,
@@ -665,15 +669,61 @@ def _rc_args_maker(string: str | Any, *_, **__):
     if type(string) is not str:
         return string
 
-    raw_ls: list[str | None] = string.split()
+    raw_ls: list[str | None] = string.split(' ')
     flags: list[str] = []
+    arguments: dict[str, str] = {}
 
-    arguments = {}
+    parsing_argument: str | None = None
+    argument_cache: str | None = None
 
-    for i in range(len(raw_ls) - 1, -1, -1):
+    def check_string(s: str) -> str:
+        for index, char in enumerate(s):
+            if char != '"':
+                continue
+            if s[index-1] == "\\":
+                continue
+
+            raise ArgumentParsingError(
+                f"--{parsing_argument}",
+                f"Found unexpected data after argument: '{s[index+1:]}'"
+            )
+
+        return s.replace('\\"', '"')
+
+    def _parse_argument(now_item):
+        nonlocal arguments, parsing_argument, argument_cache
+
+        is_first = argument_cache is None
+        if is_first and (not now_item.startswith('"')):
+            arguments[parsing_argument] = now_item
+            parsing_argument = None
+            return
+
+        is_end = now_item.endswith('"') and (not now_item.endswith('\\"'))
+        if is_first:
+            if is_end and now_item != '"':
+                arguments[parsing_argument] = check_string(now_item[1:-1])
+                parsing_argument = None
+                return
+            argument_cache = check_string(now_item[1:])
+            return
+
+        if is_end:
+            arguments[parsing_argument] = check_string(f"{argument_cache} {now_item[:-1]}")
+            parsing_argument = None
+            return
+
+        argument_cache += check_string(f" {now_item}")
+
+    for i in range(len(raw_ls)):
         item = raw_ls[i]
 
-        if item[0] != '-':
+        if parsing_argument is not None:
+            _parse_argument(item)
+            raw_ls[i] = None
+            continue
+
+        if item[:1] != '-':
             continue
 
         if item[1:2] != '-':
@@ -682,13 +732,20 @@ def _rc_args_maker(string: str | Any, *_, **__):
             continue
 
         raw_ls[i] = None
-        if (i + 1) < len(raw_ls) and raw_ls[i + 1] is not None:
-            arguments[item[2:]] = raw_ls[i + 1]
-            raw_ls[i + 1] = None
-        else:
+        if len(raw_ls) <= (i + 1):
             raise ArgumentParsingError(item, "No value provided")
 
-    return [x for x in raw_ls if x is not None], arguments, flags
+        parsing_argument = item[2:]
+        raw_ls[i] = None
+
+    if parsing_argument is not None:
+        raw_value = '"' + argument_cache.replace('"', "\\\"")
+        raise ArgumentParsingError(
+            f"--{parsing_argument}",
+            f"Unexpected end of argument: '{raw_value}'"
+        )
+
+    return [x for x in raw_ls if (x is not None) and (x != '')], arguments, flags
 
 
 def _rc_args_unpacker(*args, func, **kwargs):
@@ -703,7 +760,7 @@ def _rc_args_unpacker(*args, func, **kwargs):
 
     cmd_args_require: set[str] = {n[3:] for n in full_arg_spec.args if n.startswith("ca_")}
     cmd_flags_require: set[str] = {n[3:] for n in full_arg_spec.args if n.startswith("cf_")}
-    if not (full_arg_spec.varkw is None):
+    if full_arg_spec.varkw is not None:
         cmd_args_require |= cmd_args.keys()
         cmd_flags_require |= set(cmd_flags)
 
@@ -735,7 +792,8 @@ def _rc_args_unpacker(*args, func, **kwargs):
             raise ArgumentParsingError(f"-{flag}", "Required flag not provided")
 
         required_kwargs[f"cf_{flag}"] = True
-        cmd_flags.remove(flag)
+        while flag in cmd_flags:
+            cmd_flags.remove(flag)
 
     for arg in cmd_args:
         raise ArgumentParsingError(f"--{arg}", "Unexpected argument provided")
@@ -763,6 +821,9 @@ def main():
 
     while any(stopping.values()):
         print(f"\nWaiting for {list(stopping.keys())} to stop...", file=STDOUT_BLUE)
+        if force_to_stop:
+            print("Force stopping...", file=STDOUT_BLUE)
+            break
         time.sleep(0.5)
 
 

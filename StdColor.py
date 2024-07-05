@@ -2,7 +2,7 @@
 # cython: language_level = 3
 
 __author__ = "C418____11 <553515788@qq.com>"
-__version__ = "0.1"
+__version__ = "0.2"
 
 import sys
 
@@ -32,11 +32,15 @@ class ColorWrite:
     @file_is_empty
     def write(self, text):
         pre = ""
+        ext = ""
         if self.font_color is not None:
             pre += self.font_color
+            ext += colorama.Fore.RESET
         if self.bg_color is not None:
             pre += self.bg_color
-        self.super_.write(pre + text + colorama.Style.RESET_ALL)
+            ext += colorama.Back.RESET
+
+        self.super_.write(pre + text + ext)
 
     @file_is_empty
     def flush(self):
