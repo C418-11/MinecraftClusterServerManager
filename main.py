@@ -6,9 +6,9 @@ __version__ = "0.0.1Dev"
 
 import codecs
 import inspect
+import os
 import subprocess
 import sys
-
 import threading
 import time
 import traceback
@@ -17,9 +17,7 @@ from itertools import zip_longest
 from platform import system
 from typing import Any
 from typing import Callable
-
 import colorama
-
 from StdColor import ColorWrite
 from buffer import StringBuffer
 from command_tools import Command, CommandException
@@ -36,6 +34,7 @@ default_config = {
         "Register": {},
     }
 }
+
 
 if system() == "Windows":
     default_config["process"] |= {
@@ -71,11 +70,19 @@ elif system() == "Linux":
     }
 
 
+STDOUT_LIGHTRED = ColorWrite(sys.stdout, colorama.Fore.LIGHTRED_EX)
+STDOUT_LIGHTGREEN = ColorWrite(sys.stdout, colorama.Fore.LIGHTGREEN_EX)
+STDOUT_LIGHTYELLOW = ColorWrite(sys.stdout, colorama.Fore.LIGHTYELLOW_EX)
+STDOUT_LIGHTBLUE = ColorWrite(sys.stdout, colorama.Fore.LIGHTBLUE_EX)
+STDOUT_LIGHTMAGENTA = ColorWrite(sys.stdout, colorama.Fore.LIGHTMAGENTA_EX)
 STDOUT_LIGHTCYAN = ColorWrite(sys.stdout, colorama.Fore.LIGHTCYAN_EX)
-STDOUT_CYAN = ColorWrite(sys.stdout, colorama.Fore.CYAN)
+
 STDOUT_RED = ColorWrite(sys.stdout, colorama.Fore.RED)
 STDOUT_GREEN = ColorWrite(sys.stdout, colorama.Fore.GREEN)
 STDOUT_YELLOW = ColorWrite(sys.stdout, colorama.Fore.YELLOW)
+STDOUT_BLUE = ColorWrite(sys.stdout, colorama.Fore.BLUE)
+STDOUT_MAGENTA = ColorWrite(sys.stdout, colorama.Fore.MAGENTA)
+STDOUT_CYAN = ColorWrite(sys.stdout, colorama.Fore.CYAN)
 
 
 def _has_encoding(encoding: str) -> bool:
@@ -126,8 +133,15 @@ class SubprocessService:
         self._process_config: ConfigData = deepcopy(process_config)
 
         del self._process_config["cmd"]
+        del self._process_config["workdir"]
         if self._abbreviation is not None:
             del self._process_config["abbreviation"]
+        if self._description is not None:
+            del self._process_config["description"]
+        if self._end_cmd is not None:
+            del self._process_config["end"]
+        if not os.path.exists(self._workdir):
+            raise FileNotFoundError(f"Workdir {self._workdir} not found")
 
         self._running: bool = False
         self._process: subprocess.Popen | None = None
@@ -152,7 +166,7 @@ class SubprocessService:
 
             self._stdout_buffer.write(txt)
 
-        if self._process.poll() is None:
+        if not (self._process.poll() is None):
             self._running = False
             self._process = None
 
@@ -166,7 +180,7 @@ class SubprocessService:
         return self._stdout_buffer.isRegistered(callback)
 
     def sendStdin(self, txt: str) -> None:
-        if not self._running:
+        if not (self._process.poll() is None):
             raise RuntimeError("Process not running")
 
         self._process.stdin.write(txt.encode(self._stdin_encoding))
@@ -202,7 +216,7 @@ class SubprocessService:
         if self._end_cmd is None or self._end_cmd == "^C":
             self._process.terminate()
         else:
-            print(f"Sending end command: {self._end_cmd}")
+            print(f"Sending end command: {self._end_cmd}", file=STDOUT_MAGENTA)
             self.sendStdin(f"{self._end_cmd}\n")
 
     def join(self, timeout: float | None = None):
@@ -258,19 +272,28 @@ def start_processes(config: ConfigData):
         if process_name in processes:
             raise ValueError(f"Process '{process_name}' already exists")
 
-        processes[process_name] = SubprocessService(process_name)
+        try:
+            processes[process_name] = SubprocessService(process_name)
+        except Exception as e:
+            traceback.print_exception(e)
+            print(f"Failed to init process '{process_name}': {e}", file=STDOUT_RED)
+            continue
 
         p_abbreviation = processes[process_name].abbreviation
         if p_abbreviation is None:
-            print(f"Registered process '{process_name}'", file=STDOUT_CYAN)
+            print(f"Registered process '{process_name}'", file=STDOUT_LIGHTCYAN)
             continue
 
         if p_abbreviation in processes:
-            print(f"Abbreviation '{p_abbreviation}' already exists, skipping registration")
-            continue
+            print(
+                f"Registered process '{process_name}' with abbreviation '{p_abbreviation}'"
+                f" (overwriting previous process)",
+                file=STDOUT_CYAN
+            )
+        else:
+            print(f"Registered process '{process_name}' with abbreviation '{p_abbreviation}'", file=STDOUT_LIGHTCYAN)
 
         processes[p_abbreviation] = processes[process_name]
-        print(f"Registered process '{process_name}' with abbreviation '{p_abbreviation}'", file=STDOUT_LIGHTCYAN)
 
 
 running: bool = True
@@ -283,7 +306,7 @@ stopping: dict[str, bool] = {}
     usage="% [-e 'Use end command to terminate program instead of trying to kill process']\n"
           " [--t 'Timeout in seconds to wait for process to terminate (0.0 to 120.0)']",
 )
-def _quit(_cmd, ca_t: float | int = 5, cf_e: bool = False, *_):
+def _quit(_cmd, ca_t: float = 5, cf_e: bool = False, *_):
 
     global running, stopping
     running = False
@@ -299,19 +322,19 @@ def _quit(_cmd, ca_t: float | int = 5, cf_e: bool = False, *_):
     def _join(p):
         p.join(timeout)
         if p.is_alive():
-            print(f"Process {p.name} did not terminate within {timeout} seconds")
+            print(f"Process {p.name} did not terminate within {timeout} seconds", file=STDOUT_YELLOW)
         else:
-            print(f"Process {p.name} terminated")
+            print(f"Process {p.name} terminated", file=STDOUT_LIGHTGREEN)
 
     for process in processes.values():
         if not process.running:
-            print(f"Process {process.name} is not running")
+            print(f"Process {process.name} is not running", file=STDOUT_YELLOW)
             continue
         if cf_e:
-            print(f"Ending process {process.name}")
+            print(f"Ending process {process.name}", file=STDOUT_LIGHTBLUE)
             process.end()
         else:
-            print(f"Terminating process {process.name}")
+            print(f"Terminating process {process.name}", file=STDOUT_LIGHTBLUE)
             process.stop()
 
         t = threading.Thread(target=_join, args=(process, ), daemon=True)
@@ -322,7 +345,7 @@ def _quit(_cmd, ca_t: float | int = 5, cf_e: bool = False, *_):
         global stopping
         for th in join_threads:
             th.join()
-        print("All processes terminated")
+        print("All processes terminated", file=STDOUT_LIGHTGREEN)
         stopping["cmd.q.join_all"] = False
     stopping["cmd.q.join_all"] = True
 
@@ -337,14 +360,14 @@ def _start(cmd: list[str], *_):
     for name in cmd:
         p = processes.get(name)
         if p is None:
-            print(f"Process {name} not found")
+            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
             continue
 
         if p.running:
-            print(f"Process {name} is already running")
+            print(f"Process {name} is already running", file=STDOUT_YELLOW)
             continue
         p.start()
-        print(f"Started process {name}")
+        print(f"Started process {name}", file=STDOUT_LIGHTGREEN)
 
 
 @Command("e", description="Ends the specified process", usage="% ('*', '<process name> ...')")
@@ -355,14 +378,14 @@ def _end(cmd: list[str], *_):
     for name in cmd:
         p = processes.get(name)
         if p is None:
-            print(f"Process {name} not found")
+            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
             continue
 
         if not p.running:
-            print(f"Process {name} is not running")
+            print(f"Process {name} is not running", file=STDOUT_YELLOW)
             continue
         p.end()
-        print(f"Ended process {name}")
+        print(f"Ended process {name}", file=STDOUT_LIGHTGREEN)
 
 
 @Command("k", description="Kills the specified process", usage="% ('*', '<process name> ...')")
@@ -373,14 +396,14 @@ def _kill(cmd: list[str], *_):
     for name in cmd:
         p = processes.get(name)
         if p is None:
-            print(f"Process {name} not found")
+            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
             continue
 
         if not p.running:
-            print(f"Process {name} is not running")
+            print(f"Process {name} is not running", file=STDOUT_YELLOW)
             continue
         p.stop()
-        print(f"Killed process {name}")
+        print(f"Killed process {name}", file=STDOUT_LIGHTGREEN)
 
 
 def _print_wrapper(txt):
@@ -450,14 +473,14 @@ def _connect_pipe(cmd: list[str], *_):
     for name in cmd:
         p = processes.get(name)
         if p is None:
-            print(f"Process {name} not found")
+            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
             continue
 
         if p.isConnectedStdout(_print_wrapper):
-            print(f"Pipe for process {name} is already connected")
+            print(f"Pipe for process {name} is already connected", file=STDOUT_YELLOW)
             continue
 
-        print(f"Connected pipe for process {name}")
+        print(f"Connected pipe for process {name}", file=STDOUT_LIGHTGREEN)
         p.connectStdout(_print_wrapper)
 
 
@@ -469,14 +492,14 @@ def _disconnect_pipe(cmd: list[str], *_):
     for name in cmd:
         p = processes.get(name)
         if p is None:
-            print(f"Process {name} not found")
+            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
             continue
 
         if not p.isConnectedStdout(_print_wrapper):
-            print(f"Pipe for process {name} is not connected")
+            print(f"Pipe for process {name} is not connected", file=STDOUT_YELLOW)
             continue
 
-        print(f"Disconnected pipe for process {name}")
+        print(f"Disconnected pipe for process {name}", file=STDOUT_LIGHTGREEN)
         p.disconnectStdout(_print_wrapper)
 
 
@@ -485,26 +508,31 @@ def _disconnect_pipe(cmd: list[str], *_):
     description="Checks if the pipe is registered for the specified process",
     usage="% [process name] ..."
 )
-def _registered_pipe(cmd, *_):
+def _registered_pipe(cmd_ls: list[str], *_):
+    cmd: set[str] = set(cmd_ls)
     if not cmd:
-        cmd = processes.keys()
+        cmd = set(processes.keys())
 
     add_line, get_lines = _build_list("Process", "Description", "Registered")
 
-    for process_name in cmd:
+    for process_name in cmd.copy():
         p = processes.get(process_name)
         if p is None:
-            print(f"Process {process_name} not found")
+            print(f"Process {process_name} not found", file=STDOUT_LIGHTYELLOW)
+            cmd.remove(process_name)
             continue
 
         running_state = "Registered" if p.isConnectedStdout(_print_wrapper) else "Not registered"
         add_line(process_name, p.description or "", running_state)
 
+    if not cmd:
+        return
+
     line_gen = get_lines()
-    print(*next(line_gen), sep="     ")
+    print(*next(line_gen), sep="     ", file=STDOUT_LIGHTMAGENTA)
     for line in line_gen:
         print(end=' ')
-        print(*line, sep="     ")
+        print(*line, sep="     ", file=STDOUT_LIGHTMAGENTA)
 
 
 @Command(
@@ -521,7 +549,7 @@ def _send_text(cmd: list[str], *_):
 
         p = processes.get(name)
         if p is None:
-            print(f"Process {name} not found")
+            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
             continue
 
         process_to_send.append(p)
@@ -529,47 +557,55 @@ def _send_text(cmd: list[str], *_):
     txt = ' '.join(cmd)
     for p in process_to_send:
         if not p.running:
-            print(f"Process {p.name} is not running")
+            print(f"Process {p.name} is not running", file=STDOUT_LIGHTYELLOW)
             continue
 
-        print(f"Sent to process {p.name}: {txt}")
+        print(f"Sent to process {p.name}: {txt}", file=STDOUT_LIGHTGREEN)
         p.sendStdin(f"{txt}\n")
 
 
 @Command("ps", description="Displays the status of the specified process", usage="% [process name] ...")
-def _print_status(cmd: list[str], *_):
+def _print_status(cmd_ls: list[str], *_):
+    cmd: set[str] = set(cmd_ls)
     if not cmd:
-        cmd = processes.keys()
+        cmd = set(processes.keys())
 
     add_line, get_lines = _build_list("Process", "Description", "Running")
 
-    for name in cmd:
+    for name in cmd.copy():
         p = processes.get(name)
         if p is None:
-            print(f"Process {name} not found")
+            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
+            cmd.remove(name)
             continue
 
         running_state = "Running" if p.running else "Stopped"
         add_line(name, p.description or "", running_state)
 
+    if not cmd:
+        return
+
     line_gen = get_lines()
-    print(*next(line_gen), sep="     ")
+    print(*next(line_gen), sep="     ", file=STDOUT_LIGHTMAGENTA)
     for line in line_gen:
         print(end=' ')
-        print(*line, sep="     ")
+        print(*line, sep="     ", file=STDOUT_LIGHTMAGENTA)
 
 
 @Command("?", description="Displays the description and usage of the specified command", usage="% [command] ...")
-def _help(cmd: list[str], *_):
-    if not cmd:
+def _help(cmd_ls: list[str], *_):
+    if not cmd_ls:
         command_list: dict = DefaultCommandList.data
     else:
         command_list = {}
-        for c in cmd:
+        for c in set(cmd_ls):
             try:
                 command_list |= {c: DefaultCommandList[c]}
             except KeyError:
-                print(f"Command {c} not found")
+                print(f"Command {c} not found", file=STDOUT_LIGHTYELLOW)
+
+    if not command_list:
+        return
 
     add_line, get_lines = _build_list("Command", "Description", "Usage")
 
@@ -580,21 +616,41 @@ def _help(cmd: list[str], *_):
         add_line(cmd, desc, usage)
 
     line_gen = get_lines()
-    print("     ".join(next(line_gen)).rstrip(' '))
+    print("     ".join(next(line_gen)), file=STDOUT_LIGHTMAGENTA)
     for line in line_gen:
         print(end=' ')
-        print("     ".join(line).rstrip(' '))
+        print("     ".join(line), file=STDOUT_LIGHTMAGENTA)
 
 
 @Command("sc", description="Saves the current config to the config file", usage="%")
 def _save_config(*_):
     DefaultConfigPool.saveAll()
-    print("Config saved")
+    print("Config saved", file=STDOUT_LIGHTGREEN)
 
 
 @Command("db", description="Debug command", usage="% ...")
-def _debug(*args, **kwargs):
-    print(args, kwargs)
+def _debug(*args, cf_c: bool = False, **kwargs):
+    kwargs["cf_c"] = cf_c
+    print(args, kwargs, file=STDOUT_LIGHTMAGENTA)
+    if cf_c:
+        colors = [
+            STDOUT_RED,
+            STDOUT_GREEN,
+            STDOUT_YELLOW,
+            STDOUT_BLUE,
+            STDOUT_MAGENTA,
+            STDOUT_CYAN,
+
+            STDOUT_LIGHTRED,
+            STDOUT_LIGHTGREEN,
+            STDOUT_LIGHTYELLOW,
+            STDOUT_LIGHTBLUE,
+            STDOUT_LIGHTMAGENTA,
+            STDOUT_LIGHTCYAN,
+        ]
+
+        for file in colors:
+            print("color", file=file)
 
 
 class ArgumentParsingError(CommandException):
@@ -706,7 +762,7 @@ def main():
             print(f"An unexpected error occurred: {type(e).__name__}: {e}", file=sys.stderr)
 
     while any(stopping.values()):
-        print(f"\nWaiting for {list(stopping.keys())} to stop...")
+        print(f"\nWaiting for {list(stopping.keys())} to stop...", file=STDOUT_BLUE)
         time.sleep(0.5)
 
 
