@@ -17,15 +17,22 @@ from itertools import zip_longest
 from platform import system
 from typing import Any
 from typing import Callable
+
 import colorama
+
 from StdColor import ColorWrite
 from buffer import StringBuffer
-from command_tools import Command, CommandException
+from command_tools import Command
+from command_tools import CommandException
 from command_tools import DefaultCommandList
 from command_tools import RunCommand
 from config import ConfigData
 from config import DefaultConfigPool
+from config import YamlSL
 from config import requireConfig
+
+YamlSL.enable()
+YamlSL().registerTo()
 
 default_config = {
     "process": {
@@ -34,7 +41,6 @@ default_config = {
         "Register": {},
     }
 }
-
 
 if system() == "Windows":
     default_config["process"] |= {
@@ -317,7 +323,6 @@ force_to_stop: bool = False
           "\n└ [--t 'Timeout in seconds to wait for process to terminate (default 5, range 0 to 15 minutes)]"
 )
 def _quit(_cmd, ca_t: float = 5, cf_e: bool = False, *_):
-
     global running, stopping
 
     timeout = float(ca_t)
@@ -348,7 +353,7 @@ def _quit(_cmd, ca_t: float = 5, cf_e: bool = False, *_):
             print(f"Terminating process {process.name}", file=STDOUT_LIGHTBLUE)
             process.stop()
 
-        t = threading.Thread(target=_join, args=(process, ), daemon=True)
+        t = threading.Thread(target=_join, args=(process,), daemon=True)
         t.start()
         join_threads.append(t)
 
@@ -358,6 +363,7 @@ def _quit(_cmd, ca_t: float = 5, cf_e: bool = False, *_):
             th.join()
         print("All processes terminated", file=STDOUT_LIGHTGREEN)
         stopping["cmd.q.join_all"] = False
+
     stopping["cmd.q.join_all"] = True
 
     threading.Thread(target=_join_all, daemon=True).start()
@@ -600,6 +606,20 @@ def _print_status(cmd_ls: list[str], *_):
         print(*line, sep="     ", file=STDOUT_LIGHTMAGENTA)
 
 
+@Command(
+    "as",
+    description="TODO",
+    usage="%"
+          "\n├ [-ls 'List all]"
+          "\n├ [--a 'Add]"
+          "\n└ [--r 'Remove]"
+)
+def _auto_start(_, cf_ls: bool = False, ca_a: str = '', ca_r: str = ''):  # TODO
+    print("TODO", file=STDOUT_LIGHTYELLOW)
+    print(cf_ls, ca_a, ca_r)
+    pass
+
+
 @Command("?", description="Displays the description and usage of the specified command", usage="% [command] ...")
 def _help(cmd_ls: list[str], *_):
     if not cmd_ls:
@@ -636,28 +656,32 @@ def _save_config(*_):
     print("Config saved", file=STDOUT_LIGHTGREEN)
 
 
-@Command("db", description="Debug command", usage="% ...")
+@Command("db",
+         description="Debug command",
+         usage="%"
+               "\n├ [-c 'Show colors]"
+               "\n└ ['Any flag or argument] ...")
 def _debug(*args, **kwargs):
     print(args, kwargs, file=STDOUT_LIGHTMAGENTA)
     if kwargs.get("cf_c"):
-        colors = [
-            STDOUT_RED,
-            STDOUT_GREEN,
-            STDOUT_YELLOW,
-            STDOUT_BLUE,
-            STDOUT_MAGENTA,
-            STDOUT_CYAN,
+        colors = {
+            "Red": STDOUT_RED,
+            "Green": STDOUT_GREEN,
+            "Yellow": STDOUT_YELLOW,
+            "Blue": STDOUT_BLUE,
+            "Magenta": STDOUT_MAGENTA,
+            "Cyan": STDOUT_CYAN,
 
-            STDOUT_LIGHTRED,
-            STDOUT_LIGHTGREEN,
-            STDOUT_LIGHTYELLOW,
-            STDOUT_LIGHTBLUE,
-            STDOUT_LIGHTMAGENTA,
-            STDOUT_LIGHTCYAN,
-        ]
+            "Light Red": STDOUT_LIGHTRED,
+            "Light Green": STDOUT_LIGHTGREEN,
+            "Light Yellow": STDOUT_LIGHTYELLOW,
+            "Light Blue": STDOUT_LIGHTBLUE,
+            "Light Magenta": STDOUT_LIGHTMAGENTA,
+            "Light Cyan": STDOUT_LIGHTCYAN
+        }
 
-        for file in colors:
-            print("color", file=file)
+        for color, file in colors.items():
+            print(color, file=file)
 
 
 class ArgumentParsingError(CommandException):
@@ -679,22 +703,60 @@ def _rc_args_maker(string: str | Any, *_, **__):
     parsing_argument: str | None = None
     argument_cache: str | None = None
 
+    escape_at_end: bool = False
+
     def check_string(s: str) -> str:
-        for index, char in enumerate(s):
-            if char != '"':
-                continue
-            if s[index-1] == "\\":
+        nonlocal escape_at_end
+        result: str = ''
+        escape_map = {
+            '"': '"',
+            '\\': '\\',
+            'n': '\n',
+            't': '\t'
+        }
+        length = len(s)
+        index = 0
+        while index < length:
+            char = s[index]
+            index += 1
+
+            if (char != '\\') and (not escape_at_end):
+                if char == '"':
+                    raise ArgumentParsingError(
+                        f"--{parsing_argument}",
+                        f"Found unexpected data after argument: '{s[index:]}'"
+                    )
+                result += char
                 continue
 
-            raise ArgumentParsingError(
-                f"--{parsing_argument}",
-                f"Found unexpected data after argument: '{s[index+1:]}'"
-            )
+            if escape_at_end:
+                index -= 1
 
-        return s.replace('\\"', '"')
+            if index >= length:
+                escape_at_end = True
+                break
+
+            escape_at_end = False
+            try:
+                result += escape_map[s[index]]
+            except KeyError as e:
+                raise ArgumentParsingError(  # 转义符未找到
+                    f"--{parsing_argument}",
+                    f"Invalid escape: '\\{s[index]}'"
+                ) from e
+            index += 1
+
+        return result
 
     def _parse_argument(now_item):
         nonlocal arguments, parsing_argument, argument_cache
+
+        def _count_end(value: str):
+            count: int = 0
+            while value.endswith('\\'):
+                value = value[:-1]
+                count += 1
+            return count
 
         is_first = argument_cache is None
         if is_first and (not now_item.startswith('"')):
@@ -702,7 +764,7 @@ def _rc_args_maker(string: str | Any, *_, **__):
             parsing_argument = None
             return
 
-        is_end = now_item.endswith('"') and (not now_item.endswith('\\"'))
+        is_end = now_item.endswith('"') and (_count_end(now_item[:-1]) % 2 == 0)
         if is_first:
             if is_end and now_item != '"':
                 arguments[parsing_argument] = check_string(now_item[1:-1])
@@ -712,7 +774,8 @@ def _rc_args_maker(string: str | Any, *_, **__):
             return
 
         if is_end:
-            arguments[parsing_argument] = check_string(f"{argument_cache} {now_item[:-1]}")
+            argument_cache += check_string(f" {now_item[:-1]}")
+            arguments[parsing_argument] = argument_cache
             parsing_argument = None
             return
 
@@ -742,10 +805,9 @@ def _rc_args_maker(string: str | Any, *_, **__):
         raw_ls[i] = None
 
     if parsing_argument is not None:
-        raw_value = '"' + argument_cache.replace('"', "\\\"")
         raise ArgumentParsingError(
             f"--{parsing_argument}",
-            f"Unexpected end of argument: '{raw_value}'"
+            f"Unexpected end of argument: '\"{argument_cache}'"
         )
 
     return [x for x in raw_ls if (x is not None) and (x != '')], arguments, flags
