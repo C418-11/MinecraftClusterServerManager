@@ -139,16 +139,16 @@ class SubprocessService:
         self._start_cmd: str | list[str] = process_config["cmd"]
         self._end_cmd: str | None = process_config.get("end")
         self._workdir: str = process_config["workdir"]
-        self._process_config: ConfigData = deepcopy(process_config)
+        self.process_config: ConfigData = deepcopy(process_config)
 
-        del self._process_config["cmd"]
-        del self._process_config["workdir"]
+        del self.process_config["cmd"]
+        del self.process_config["workdir"]
         if self._abbreviation is not None:
-            del self._process_config["abbreviation"]
+            del self.process_config["abbreviation"]
         if self._description is not None:
-            del self._process_config["description"]
+            del self.process_config["description"]
         if self._end_cmd is not None:
-            del self._process_config["end"]
+            del self.process_config["end"]
         if not os.path.exists(self._workdir):
             raise FileNotFoundError(f"Workdir {self._workdir} not found")
 
@@ -608,16 +608,35 @@ def _print_status(cmd_ls: list[str], *_):
 
 @Command(
     "as",
-    description="TODO",
     usage="%"
-          "\n├ [-ls 'List all]"
-          "\n├ [--a 'Add]"
-          "\n└ [--r 'Remove]"
+          "\n├ [-l 'List all]"
+          "\n├ [-a 'Add]"
+          "\n└ [-r 'Remove]"
 )
-def _auto_start(_, cf_ls: bool = False, ca_a: str = '', ca_r: str = ''):  # TODO
+def _auto_start(cmd_ls: list[str], cf_l: bool = False, cf_a: bool = False, cf_r: bool = False):  # TODO
     print("TODO", file=STDOUT_LIGHTYELLOW)
-    print(cf_ls, ca_a, ca_r)
-    pass
+    print(cf_l, cf_a, cf_r)
+    show_processes = set()
+    add_processes = set()
+    remove_processes = set()
+
+    def _show_list():
+        add_line, get_lines = _build_list("Process", "Description", "Enable AutoStart")
+        for pname, pobj in processes.items():
+            p_autostart = pobj.process_config.get("auto start")
+            add_line(pname, pobj.description, p_autostart if p_autostart is not None else "Not defined!")
+
+        line_gen = get_lines()
+        print("     ".join(next(line_gen)), file=STDOUT_LIGHTMAGENTA)
+        for line in line_gen:
+            print(end=' ')
+            print("     ".join(line), file=STDOUT_LIGHTMAGENTA)
+
+    if not cmd_ls:
+        show_processes.update(processes.keys())
+
+    if cf_l:
+        _show_list()
 
 
 @Command("?", description="Displays the description and usage of the specified command", usage="% [command] ...")
@@ -698,7 +717,7 @@ def _rc_args_maker(string: str | Any, *_, **__):
 
     raw_ls: list[str | None] = string.split(' ')
     flags: list[str] = []
-    arguments: dict[str, str] = {}
+    arguments: dict[str, list[str]] = {}
 
     parsing_argument: str | None = None
     argument_cache: str | None = None
@@ -748,7 +767,7 @@ def _rc_args_maker(string: str | Any, *_, **__):
 
         return result
 
-    def _parse_argument(now_item):
+    def _parse_argument(now_item: str):
         nonlocal arguments, parsing_argument, argument_cache
 
         def _count_end(value: str):
@@ -760,14 +779,14 @@ def _rc_args_maker(string: str | Any, *_, **__):
 
         is_first = argument_cache is None
         if is_first and (not now_item.startswith('"')):
-            arguments[parsing_argument] = now_item
+            arguments[parsing_argument][-1] = now_item
             parsing_argument = None
             return
 
         is_end = now_item.endswith('"') and (_count_end(now_item[:-1]) % 2 == 0)
         if is_first:
             if is_end and now_item != '"':
-                arguments[parsing_argument] = check_string(now_item[1:-1])
+                arguments[parsing_argument][-1] = check_string(now_item[1:-1])
                 parsing_argument = None
                 return
             argument_cache = check_string(now_item[1:])
@@ -775,7 +794,7 @@ def _rc_args_maker(string: str | Any, *_, **__):
 
         if is_end:
             argument_cache += check_string(f" {now_item[:-1]}")
-            arguments[parsing_argument] = argument_cache
+            arguments[parsing_argument][-1] = argument_cache
             parsing_argument = None
             return
 
@@ -802,6 +821,9 @@ def _rc_args_maker(string: str | Any, *_, **__):
             raise ArgumentParsingError(item, "No value provided")
 
         parsing_argument = item[2:]
+        if parsing_argument not in arguments:
+            arguments[parsing_argument] = []
+        arguments[parsing_argument].append('')
         raw_ls[i] = None
 
     if parsing_argument is not None:
@@ -817,15 +839,17 @@ def _rc_args_unpacker(*args, func, **kwargs):
     (cmd, cmd_args, cmd_flags), *args = args
     cmd: list[str]
     cmd_args: dict[str, str]
-    cmd_flags: list[str]
+    cmd_flags: list[str | list[str]]
 
     full_arg_spec = inspect.getfullargspec(func)
     annotations = full_arg_spec.annotations
     default_index = len(full_arg_spec.args) - len(full_arg_spec.defaults if full_arg_spec.defaults is not None else [])
 
-    cmd_args_require: set[str] = {n[3:] for n in full_arg_spec.args if n.startswith("ca_")}
+    cmd_multi_args_require: set[str] = {n[4:] for n in full_arg_spec.args if n.startswith("cma_")}
+    cmd_args_require: set[str] = {n[3:] for n in full_arg_spec.args if n.startswith("ca_")} | cmd_multi_args_require
     cmd_flags_require: set[str] = {n[3:] for n in full_arg_spec.args if n.startswith("cf_")}
     if full_arg_spec.varkw is not None:
+        cmd_multi_args_require |= cmd_args.keys()
         cmd_args_require |= cmd_args.keys()
         cmd_flags_require |= set(cmd_flags)
 
@@ -837,6 +861,15 @@ def _rc_args_unpacker(*args, func, **kwargs):
             if has_default:
                 continue
             raise ArgumentParsingError(f"--{arg}", "Required argument not provided")
+
+        if isinstance(cmd_args[arg], list) and (arg not in cmd_multi_args_require):
+            arg_length = len(cmd_args[arg])
+            if arg_length > 1:
+                raise ArgumentParsingError(f"--{arg}", "Argument more than one")
+            if arg_length < 1:
+                raise ArgumentParsingError(f"--{arg}", "Argument less than one")
+
+            cmd_args[arg] = cmd_args[arg][0]
 
         if f"ca_{arg}" in annotations:
             try:
