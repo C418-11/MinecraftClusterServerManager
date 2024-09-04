@@ -175,6 +175,9 @@ class SubprocessService:
 
             self._stdout_buffer.write(txt)
 
+        if self._process is None:
+            self._running = False
+            return
         if self._process.poll() is not None:
             self._running = False
             self._process = None
@@ -216,7 +219,6 @@ class SubprocessService:
             raise RuntimeError("Process not running")
 
         self._process.terminate()
-        self._running = False
 
     def end(self):
         if not self._running:
