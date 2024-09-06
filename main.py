@@ -191,12 +191,13 @@ class SubprocessService:
     def isConnectedStdout(self, callback: Callable[[str], None]) -> bool:
         return self._stdout_buffer.isRegistered(callback)
 
-    def sendStdin(self, txt: str) -> None:
+    def sendStdin(self, txt: str, flush: bool = True) -> None:
         if self._process.poll() is not None:
             raise RuntimeError("Process not running")
 
         self._process.stdin.write(txt.encode(self._stdin_encoding))
-        self._process.stdin.flush()
+        if flush:
+            self._process.stdin.flush()
 
     def start(self):
         if self._running:
@@ -559,9 +560,10 @@ def _registered_pipe(cmd_ls: list[str], *_):
     "st",
     description="Sends text to the specified process",
     usage="% <process name> ..."
-          "\n└ [--t 'Text to send]"
+          "\n├ [--t 'Text to send]"
+          "\n└ [-nf 'No flush]"
 )
-def _send_text(cmd: list[str], ca_t: str = '', *_):
+def _send_text(cmd: list[str], ca_t: str = '', cf_nf: bool = False, *_):
     process_to_send = []
     for name in set(cmd):
         p = processes.get(name)
@@ -577,7 +579,7 @@ def _send_text(cmd: list[str], ca_t: str = '', *_):
             continue
 
         print(f"Sent to process {p.name}: {ca_t}", file=STDOUT_LIGHTGREEN)
-        p.sendStdin(f"{ca_t}\n")
+        p.sendStdin(f"{ca_t}\n\r", not cf_nf)
 
 
 @Command("ps", description="Displays the status of the specified process", usage="% [process name] ...")
@@ -733,6 +735,7 @@ def _rc_args_maker(string: str | Any, *_, **__):
             '"': '"',
             '\\': '\\',
             'n': '\n',
+            'r': '\r',
             't': '\t'
         }
         length = len(s)
@@ -910,6 +913,9 @@ def main():
 
     while running:
         input_str = input()
+
+        if not input_str:
+            continue
 
         try:
             run_command.run_by_str(f"${input_str}", float("inf"))
