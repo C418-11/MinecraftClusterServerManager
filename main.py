@@ -612,23 +612,48 @@ def _print_status(cmd_ls: list[str], *_):
 
 @Command(
     "as",
+    description="Sets the auto-start status of the specified process",
     usage="%"
-          "\n├ [-l 'List all]"
-          "\n├ [-a 'Add]"
-          "\n└ [-r 'Remove]"
+          "\n├ [-l 'List auto-start processes]"      
+          "\n├ [-s 'Set auto-start]"
+          "\n└ [-c 'Cancel auto-start]"
 )
-def _auto_start(cmd_ls: list[str], cf_l: bool = False, cf_a: bool = False, cf_r: bool = False):  # TODO
-    print("TODO", file=STDOUT_LIGHTYELLOW)
-    print(cf_l, cf_a, cf_r)
-    show_processes = set()
-    add_processes = set()
-    remove_processes = set()
+def _auto_start(cmd_ls: list[str], cf_l: bool = False, cf_s: bool = False, cf_c: bool = False):
+    flags: dict[str, bool] = {"-l": cf_l, "-s": cf_s, "-c": cf_c}
+    flag_count = sum([x for x in flags.values()])
+    if flag_count > 1:
+        flags_string = ', '.join(filter(lambda x: flags[x], flags.keys()))
+        raise ArgumentParsingError(flags_string, f"Only one of {', '.join(flags.keys())} can be used at a time")
+    elif flag_count == 0:
+        print("Use '? as' for help", file=STDOUT_LIGHTYELLOW)
+        return
+
+    process_names: set[str] = set(cmd_ls)
+    if not process_names:
+        process_names = set(processes.keys())
 
     def _show_list():
         add_line, get_lines = _build_list("Process", "Description", "Enable AutoStart")
-        for pname, pobj in processes.items():
-            p_autostart = pobj.process_config.get("auto start")
+        for pname in process_names.copy():
+            pobj = processes.get(pname)
+            if pobj is None:
+                print(f"Process '{pname}' not found!", file=STDOUT_LIGHTYELLOW)
+                process_names.remove(pname)
+                continue
+            p_autostart = requireConfig(
+                '', "process.yaml",
+                {f"Register.{pobj.name}.auto_start": None | bool}
+            ).checkConfig(ignore_missing=True).get(f"Register.{pobj.name}.auto_start")
+            if p_autostart is None:
+                p_autostart = "Not defined!"
+            elif isinstance(p_autostart, bool):
+                p_autostart = "Enabled" if p_autostart else "Disabled"
+            else:
+                p_autostart = "Invalid value!"
             add_line(pname, pobj.description, p_autostart if p_autostart is not None else "Not defined!")
+
+        if not process_names:
+            return
 
         line_gen = get_lines()
         print("     ".join(next(line_gen)), file=STDOUT_LIGHTMAGENTA)
@@ -636,11 +661,28 @@ def _auto_start(cmd_ls: list[str], cf_l: bool = False, cf_a: bool = False, cf_r:
             print(end=' ')
             print("     ".join(line), file=STDOUT_LIGHTMAGENTA)
 
-    if not cmd_ls:
-        show_processes.update(processes.keys())
+    def _set():
+        for pname in process_names:
+            pobj = processes.get(pname)
+            if pobj is None:
+                print(f"Process '{pname}' not found!", file=STDOUT_LIGHTYELLOW)
+                continue
+            DefaultConfigPool.get('', "process.yaml").data.setPathValue(f"Register.{pobj.name}.auto_start", True)
+
+    def _cancel():
+        for pname in process_names:
+            pobj = processes.get(pname)
+            if pobj is None:
+                print(f"Process '{pname}' not found!", file=STDOUT_LIGHTYELLOW)
+                continue
+            DefaultConfigPool.get('', "process.yaml").data.setPathValue(f"Register.{pobj.name}.auto_start", False)
 
     if cf_l:
         _show_list()
+    elif cf_s:
+        _set()
+    elif cf_c:
+        _cancel()
 
 
 @Command("?", description="Displays the description and usage of the specified command", usage="% [command] ...")
@@ -910,6 +952,14 @@ def _rc_args_unpacker(*args, func, **kwargs):
 def main():
     start_processes()
     run_command = RunCommand(args_maker=_rc_args_maker, args_unpacker=_rc_args_unpacker)
+
+    for pobj in processes.values():
+        if not pobj.process_config.get("auto_start"):
+            continue
+        try:
+            _start([pobj.name])
+        except Exception as e:
+            print(f"Failed to start {pobj.name}: {e}", file=STDOUT_LIGHTRED)
 
     while running:
         input_str = input()
