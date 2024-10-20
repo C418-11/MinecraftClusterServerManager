@@ -139,6 +139,9 @@ class ConfigData:
 
     @property
     def data(self) -> D:
+        """
+        配置的原始数据
+        """
         return deepcopy(self._data)
 
     def _process_path(self, path: str, process_check: Callable, process_return: Callable) -> Any:
@@ -206,7 +209,7 @@ class ConfigData:
 
         return self._process_path(path, checker, process_return)
 
-    def setPathValue(self, path: str, value: Any, *, allow_create: bool = True) -> None:
+    def setPathValue(self, path: str, value: Any, *, allow_create: bool = True) -> Self:
         """
         设置路径的值
 
@@ -217,8 +220,8 @@ class ConfigData:
         :param allow_create: 是否允许创建不存在的路径，默认为True
         :type allow_create: bool
 
-        :return: None
-        :rtype: None
+        :return: 返回当前实例便于链式调用
+        :rtype: Self
 
         :raise ConfigDataTypeError: 配置数据类型错误
         :raise RequiredKeyNotFoundError: 需求的键不存在
@@ -238,16 +241,17 @@ class ConfigData:
                 now_data[now_path] = value
 
         self._process_path(path, checker, lambda *_: None)
+        return self
 
-    def deletePath(self, path: str) -> None:
+    def deletePath(self, path: str) -> Self:
         """
         删除路径
 
         :param path: 路径
         :type path: str
 
-        :return: None
-        :rtype: None
+        :return: 返回当前实例便于链式调用
+        :rtype: Self
 
         :raise ConfigDataTypeError: 配置数据类型错误
         :raise RequiredKeyNotFoundError: 需求的键不存在
@@ -266,6 +270,7 @@ class ConfigData:
                 return True
 
         self._process_path(path, checker, lambda *_: None)
+        return self
 
     def hasPath(self, path: str) -> bool:
         """
@@ -478,6 +483,8 @@ class ABCConfig(ABC):
         :type file_name: Optional[str]
         :param config_format: 配置文件的格式
         :type config_format: Optional[str]
+
+        :raise UnsupportedConfigFormatError: 不支持的配置格式
         """
         ...
 
@@ -506,6 +513,8 @@ class ABCConfig(ABC):
 
         :return: 配置对象
         :rtype: Self
+
+        :raise UnsupportedConfigFormatError: 不支持的配置格式
         """
         ...
 
@@ -719,8 +728,7 @@ class Config(ABCConfig):
             config_format = self.config_format
 
         if config_format is None:
-            raise ValueError("file_name and config_format can't be None")
-
+            raise UnsupportedConfigFormatError("Unknown")
         if config_format not in config_pool.SLProcessor:
             raise UnsupportedConfigFormatError(config_format)
 
@@ -762,7 +770,7 @@ class Config(ABCConfig):
 yaml: ModuleType
 
 
-class YamlSL(ABCConfigSL):
+class SimpleYamlSL(ABCConfigSL):
     @property
     def regName(self) -> str:
         return "yaml"
@@ -791,7 +799,10 @@ class YamlSL(ABCConfigSL):
 
         file_path = self._getFilePath(config, root_path, namespace, file_name)
         with open(file_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(config.data.data, f, *new_args, **new_kwargs)
+            try:
+                yaml.safe_dump(config.data.data, f, *new_args, **new_kwargs)
+            except yaml.YAMLError as e:
+                raise UnsupportedConfigFormatError(self.regName) from e
 
     def load(
             self,
@@ -803,7 +814,10 @@ class YamlSL(ABCConfigSL):
             **kwargs
     ) -> C:
         with open(_norm_join(root_path, namespace, file_name), "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+            try:
+                data = yaml.safe_load(f)
+            except yaml.YAMLError as e:
+                raise UnsupportedConfigFormatError(self.regName) from e
 
         obj = config_cls(ConfigData(data))
         obj.namespace = namespace
@@ -846,7 +860,10 @@ class JsonSL(ABCConfigSL):
 
         file_path = self._getFilePath(config, root_path, namespace, file_name)
         with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(config.data.data, f, *new_args, **new_kwargs)
+            try:
+                json.dump(config.data.data, f, *new_args, **new_kwargs)
+            except TypeError as e:
+                raise UnsupportedConfigFormatError(self.regName) from e
 
     def load(
             self,
@@ -861,7 +878,10 @@ class JsonSL(ABCConfigSL):
         new_kwargs = deepcopy(self.load_arg[1]) | kwargs
 
         with open(_norm_join(root_path, namespace, file_name), "r", encoding="utf-8") as f:
-            data = json.load(f, *new_args, **new_kwargs)
+            try:
+                data = json.load(f, *new_args, **new_kwargs)
+            except json.DecodeError as e:
+                raise UnsupportedConfigFormatError(self.regName) from e
 
         obj = config_cls(ConfigData(data))
         obj.namespace = namespace
@@ -998,6 +1018,7 @@ class RequireConfigDecorator:
             raw_file_name: str,
             required: RequiredKey,
             *,
+            config_cls: type[ABCConfig] = Config,
             config_format: Optional[str] = None,
             cache_config: Optional[Callable[[Callable], Callable]] = None,
             allow_create: bool = True,
@@ -1020,31 +1041,52 @@ class RequireConfigDecorator:
         :type allow_create: bool
         :param filter_kwargs: RequiredKey.filter要绑定的默认参数，默认为allow_create=True
         :type filter_kwargs: dict[str, Any]
+
+        :raise UnsupportedConfigFormatError: 不支持的配置格式
         """
+        format_set: set[str]
         if config_format is None:
             _, config_format = os.path.splitext(raw_file_name)
             if not config_format:
                 raise UnsupportedConfigFormatError("Unknown")
             if config_format not in config_pool.FileExtProcessor:
                 raise UnsupportedConfigFormatError(config_format)
-            config_format = next(iter(config_pool.FileExtProcessor[config_format]))  # todo 从取用[0]到挨个尝试
+            format_set = config_pool.FileExtProcessor[config_format]
+        else:
+            format_set = {config_format, }
 
-        if config_format not in config_pool.SLProcessor:
-            raise UnsupportedConfigFormatError(config_format)
+        def _load_config(format_: str) -> ABCConfig:
+            if format_ not in config_pool.SLProcessor:
+                raise UnsupportedConfigFormatError(format_)
 
-        config: ABCConfig | None = config_pool.get(namespace, raw_file_name)
-        if config is None:
+            result: ABCConfig | None = config_pool.get(namespace, raw_file_name)
+            if result is None:
+                try:
+                    result = config_cls.load(config_pool, namespace, raw_file_name, format_)
+                except FileNotFoundError:
+                    if not allow_create:
+                        raise
+                    result = config_cls(
+                        ConfigData(),
+                        namespace=namespace,
+                        file_name=raw_file_name,
+                        config_format=format_
+                    )
+
+                config_pool.set(namespace, raw_file_name, result)
+            return result
+
+        e = None
+        for f in format_set:
             try:
-                config = Config.load(config_pool, namespace, raw_file_name, config_format)
-            except FileNotFoundError:
-                if not allow_create:
-                    raise
-                config = Config(ConfigData())
-                config.namespace = namespace
-                config.file_name = raw_file_name
-                config.config_format = config_format
-
-            config_pool.set(namespace, raw_file_name, config)
+                ret = _load_config(f)
+            except UnsupportedConfigFormatError as err:
+                e = err
+                continue
+            config: ABCConfig = ret
+            break
+        else:
+            raise UnsupportedConfigFormatError(", ".join(format_set)) from e  # todo
 
         if filter_kwargs is None:
             filter_kwargs = {}
@@ -1104,7 +1146,7 @@ __all__ = (
     "ABCConfig",
     "ABCConfigSL",
     "Config",
-    "YamlSL",
+    "SimpleYamlSL",
     "JsonSL",
     "ConfigPool",
     "RequireConfigDecorator",
