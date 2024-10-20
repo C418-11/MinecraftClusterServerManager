@@ -17,8 +17,8 @@ from copy import deepcopy
 from itertools import zip_longest
 from platform import system
 from typing import Any
-from typing import Generator
 from typing import Callable
+from typing import Generator
 from weakref import WeakKeyDictionary
 
 import colorama
@@ -80,7 +80,6 @@ elif system() == "Linux":
             }
         },
     }
-
 
 STDOUT_LIGHTRED = ColorWrite(sys.stdout, colorama.Fore.LIGHTRED_EX)
 STDOUT_LIGHTGREEN = ColorWrite(sys.stdout, colorama.Fore.LIGHTGREEN_EX)
@@ -598,7 +597,6 @@ def _disconnect_pipe(cmd: list[str], ca_f: str = None):
     usage="% [process name] ..."
 )
 def _registered_pipe(cmd: list[str], *_):
-
     add_line, get_lines = _build_table("Process", "Description", "Registered")
 
     p = None
@@ -661,7 +659,7 @@ def _print_status(cmd: list[str], *_):
     "as",
     description="Sets the auto-start status of the specified process",
     usage="%"
-          "\n├ [-l 'List auto-start processes]"      
+          "\n├ [-l 'List auto-start processes]"
           "\n├ [-s 'Set auto-start]"
           "\n└ [-c 'Cancel auto-start]"
 )
