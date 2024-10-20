@@ -5,6 +5,7 @@ __author__ = "C418____11 <553515788@qq.com>"
 __version__ = "0.0.1Dev"
 
 import codecs
+import functools
 import inspect
 import os
 import subprocess
@@ -16,7 +17,9 @@ from copy import deepcopy
 from itertools import zip_longest
 from platform import system
 from typing import Any
+from typing import Generator
 from typing import Callable
+from weakref import WeakKeyDictionary
 
 import colorama
 
@@ -28,11 +31,11 @@ from command_tools import DefaultCommandList
 from command_tools import RunCommand
 from config import ConfigData
 from config import DefaultConfigPool
-from config import YamlSL
+from config import SimpleYamlSL
 from config import requireConfig
 
-YamlSL.enable()
-YamlSL().registerTo()
+SimpleYamlSL.enable()
+SimpleYamlSL().registerTo()
 
 default_config = {
     "process": {
@@ -160,9 +163,9 @@ class SubprocessService:
 
     def _buffer_loop(self):
         cache: bytes = b''
-        while self._running and self._process.poll() is None:
-            cache += self._process.stdout.read(1)
 
+        def _process_cache() -> bool:
+            nonlocal cache
             try:
                 txt = cache.decode(self._stdout_encoding)
                 cache = b''
@@ -171,9 +174,22 @@ class SubprocessService:
                     txt = '?'
                     cache = cache[:e.start] + cache[e.end:]
                 else:
-                    continue
+                    return True
 
             self._stdout_buffer.write(txt)
+
+        while self._running and self._process.poll() is None:
+            cache += self._process.stdout.read(1)
+            if _process_cache():
+                continue
+
+        __temp__cache = cache
+        if _process_cache():
+            print("$$Decode Failed # TODO")  # TODO
+        else:
+            print("$$Decoded stdout cache$$ # TODO")  # TODO
+        if __temp__cache != cache:
+            print(f"$$Diff Cache: {__temp__cache!r} {cache!r}")
 
         if self._process is None:
             self._running = False
@@ -228,7 +244,6 @@ class SubprocessService:
         if self._end_cmd is None or self._end_cmd == "^C":
             self._process.terminate()
         else:
-            print(f"Sending end command: {self._end_cmd}", file=STDOUT_MAGENTA)
             self.sendStdin(f"{self._end_cmd}\n")
 
     def join(self, timeout: float | None = None):
@@ -236,12 +251,12 @@ class SubprocessService:
             try:
                 self._process.wait(timeout)
             except subprocess.TimeoutExpired as e:
-                raise TimeoutError(f"Process {self._name} did not end within {timeout} seconds") from e
+                raise TimeoutError(f"Process '{self._name}' did not end within {timeout} seconds") from e
 
         if self._thread is not None:
             self._thread.join(timeout)
             if self._thread.is_alive():
-                raise TimeoutError(f"Thread {self._thread.name} did not join within {timeout} seconds")
+                raise TimeoutError(f"Thread '{self._thread.name}' did not join within {timeout} seconds")
 
     def is_alive(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -266,6 +281,10 @@ class SubprocessService:
     @property
     def running(self) -> bool:
         return self._running
+
+    @property
+    def end_cmd(self) -> str:
+        return self._end_cmd
 
 
 processes: dict[str, SubprocessService] = {}
@@ -341,19 +360,19 @@ def _quit(_cmd, ca_t: float = 5, cf_e: bool = False, *_):
     def _join(p: SubprocessService):
         try:
             p.join(timeout)
-            print(f"Process {p.name} terminated", file=STDOUT_LIGHTGREEN)
+            print(f"Process '{p.name}' terminated", file=STDOUT_LIGHTGREEN)
         except TimeoutError:
-            print(f"Process {p.name} did not terminate within {timeout} seconds", file=STDOUT_LIGHTYELLOW)
+            print(f"Process '{p.name}' did not terminate within {timeout} seconds", file=STDOUT_LIGHTYELLOW)
 
     for process in processes.values():
         if not process.running:
-            print(f"Process {process.name} is not running", file=STDOUT_YELLOW)
+            print(f"Process '{process.name}' is not running", file=STDOUT_YELLOW)
             continue
         if cf_e:
-            print(f"Ending process {process.name}", file=STDOUT_LIGHTBLUE)
+            print(f"Ending process '{process.name}' ({process.end_cmd})", file=STDOUT_LIGHTBLUE)
             process.end()
         else:
-            print(f"Terminating process {process.name}", file=STDOUT_LIGHTBLUE)
+            print(f"Terminating process '{process.name}'", file=STDOUT_LIGHTBLUE)
             process.stop()
 
         t = threading.Thread(target=_join, args=(process,), daemon=True)
@@ -373,65 +392,76 @@ def _quit(_cmd, ca_t: float = 5, cf_e: bool = False, *_):
     running = False
 
 
+def _validate_processes_name(
+        names: list[str],
+        checker: Callable[[SubprocessService], bool | None] = lambda _: False,
+        *,
+        default_to_all: bool = False
+) -> Generator[SubprocessService, Any, None]:
+    """
+    **顺序可能丢失**
+    """
+    name_set: set[str] = set(names)
+    if (not name_set) and default_to_all:
+        name_set |= {x.name for x in processes.values()}
+    if '*' in name_set:
+        name_set |= {x.name for x in processes.values()}
+        name_set.remove('*')
+
+    if not name_set:
+        print("No processes specified", file=STDOUT_YELLOW)
+
+    for name in name_set:
+        if name not in processes:
+            print(f"Process '{name}' not found", file=STDOUT_LIGHTYELLOW)
+            continue
+
+        pobj = processes[name]
+        if pobj.name != name and pobj.name in name_set:
+            continue
+        if checker(pobj):
+            continue
+
+        yield pobj
+
+
 @Command("s", description="Starts the specified process", usage="% <'*' | process name> ...")
 def _start(cmd: list[str], *_):
-    if '*' in cmd:
-        cmd = processes.keys()
+    def checker(pobj: SubprocessService):
+        if pobj.running:
+            print(f"Process '{pobj.name}' is already running", file=STDOUT_YELLOW)
+            return True
 
-    for name in cmd:
-        p = processes.get(name)
-        if p is None:
-            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
-            continue
-
-        if p.running:
-            print(f"Process {name} is already running", file=STDOUT_YELLOW)
-            continue
+    for p in _validate_processes_name(cmd, checker):
+        print(f"Starting process '{p.name}'", file=STDOUT_LIGHTGREEN)
         p.start()
-        print(f"Started process {name}", file=STDOUT_LIGHTGREEN)
 
 
 @Command("e", description="Ends the specified process", usage="% <'*' | process name> ...")
 def _end(cmd: list[str], *_):
-    if '*' in cmd:
-        cmd = processes.keys()
+    def checker(pobj: SubprocessService):
+        if not pobj.running:
+            print(f"Process '{pobj.name}' is not running", file=STDOUT_YELLOW)
+            return True
 
-    for name in cmd:
-        p = processes.get(name)
-        if p is None:
-            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
-            continue
-
-        if not p.running:
-            print(f"Process {name} is not running", file=STDOUT_YELLOW)
-            continue
+    for p in _validate_processes_name(cmd, checker):
+        print(f"Sending end command: '{p.end_cmd}'", file=STDOUT_MAGENTA)
         p.end()
-        print(f"Ended process {name}", file=STDOUT_LIGHTGREEN)
 
 
 @Command("k", description="Kills the specified process", usage="% <'*' | process name> ...")
 def _kill(cmd: list[str], *_):
-    if '*' in cmd:
-        cmd = processes.keys()
+    def checker(pobj: SubprocessService):
+        if not pobj.running:
+            print(f"Process '{pobj.name}' is not running", file=STDOUT_YELLOW)
+            return True
 
-    for name in cmd:
-        p = processes.get(name)
-        if p is None:
-            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
-            continue
-
-        if not p.running:
-            print(f"Process {name} is not running", file=STDOUT_YELLOW)
-            continue
+    for p in _validate_processes_name(cmd, checker):
+        print(f"Killing process '{p.name}'", file=STDOUT_LIGHTGREEN)
         p.stop()
-        print(f"Killed process {name}", file=STDOUT_LIGHTGREEN)
 
 
-def _print_wrapper(txt):
-    print(txt, end="")
-
-
-def _build_list(*titles):
+def _build_table(*titles):
     column_max_len: list[int] = [len(t) for t in titles]
     lines: list[tuple[str, ...]] = [tuple(t for t in titles)]
 
@@ -486,42 +516,80 @@ def _build_list(*titles):
     return _add_line, _get_lines
 
 
-@Command("cp", description="Connects the pipe to the specified process", usage="% <'*' | <process name> ...")
-def _connect_pipe(cmd: list[str], *_):
-    if '*' in cmd:
-        cmd = processes.keys()
-
-    for name in cmd:
-        p = processes.get(name)
-        if p is None:
-            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
-            continue
-
-        if p.isConnectedStdout(_print_wrapper):
-            print(f"Pipe for process {name} is already connected", file=STDOUT_YELLOW)
-            continue
-
-        print(f"Connected pipe for process {name}", file=STDOUT_LIGHTGREEN)
-        p.connectStdout(_print_wrapper)
+TABLE_SEP = "    "
+TABLE_INDENT = ' '
 
 
-@Command("dp", description="Disconnects the pipe from the specified process", usage="% <'*' | <process name> ...")
-def _disconnect_pipe(cmd: list[str], *_):
-    if '*' in cmd:
-        cmd = processes.keys()
+def _show_table(line_gen, file=None):
+    if file is None:
+        file = STDOUT_LIGHTMAGENTA
+    print(*next(line_gen), sep=TABLE_SEP, file=file)
+    for line in line_gen:
+        print(end=TABLE_INDENT)
+        print(*line, sep=TABLE_SEP, file=file)
 
-    for name in cmd:
-        p = processes.get(name)
-        if p is None:
-            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
-            continue
 
-        if not p.isConnectedStdout(_print_wrapper):
-            print(f"Pipe for process {name} is not connected", file=STDOUT_YELLOW)
-            continue
+def _print_wrapper(txt, file: str = None, encoding: str = "utf-8"):
+    if file is not None:
+        file = open(file, mode='a', encoding=encoding)
+    try:
+        print(txt, end='', file=file)
+    finally:
+        if file is not None:
+            file.close()
 
-        print(f"Disconnected pipe for process {name}", file=STDOUT_LIGHTGREEN)
-        p.disconnectStdout(_print_wrapper)
+
+ProcessPipeCallbacks: WeakKeyDictionary[SubprocessService, dict[str | None, Callable]] = WeakKeyDictionary()
+
+
+def _pipe_name(pipe: str | None):
+    return "Console" if pipe is None else pipe
+
+
+@Command(
+    "cp",
+    description="Connects the pipe to the specified process",
+    usage="% <'*' | <process name> ...\n"
+          "└ [-f 'File to connect(Console if not set)]"
+)
+def _connect_pipe(cmd: list[str], ca_f: str = None):
+    callback = functools.partial(_print_wrapper, file=ca_f)
+
+    def checker(pobj: SubprocessService):
+        if pobj not in ProcessPipeCallbacks:
+            return
+        if ca_f in ProcessPipeCallbacks[pobj]:
+            print(f"Process '{pobj.name}' already connected to '{_pipe_name(ca_f)}'", file=STDOUT_YELLOW)
+            return True
+
+    for p in _validate_processes_name(cmd, checker):
+        if p not in ProcessPipeCallbacks:
+            ProcessPipeCallbacks[p] = {}
+
+        print(f"Connecting process '{p.name}' to '{_pipe_name(ca_f)}'", file=STDOUT_LIGHTGREEN)
+        p.connectStdout(callback)
+        ProcessPipeCallbacks[p][ca_f] = callback
+
+
+@Command(
+    "dp",
+    description="Disconnects the pipe from the specified process",
+    usage="% <'*' | <process name> ...\n"
+          "└ [-f 'File to connect(Console if not set)]"
+)
+def _disconnect_pipe(cmd: list[str], ca_f: str = None):
+    def checker(pobj: SubprocessService):
+        if ca_f not in ProcessPipeCallbacks.get(pobj, []):
+            print(f"Process '{pobj.name}' is not connected to '{_pipe_name(ca_f)}'", file=STDOUT_YELLOW)
+            return True
+
+    for p in _validate_processes_name(cmd, checker):
+        print(f"Disconnecting process '{p.name}' from '{_pipe_name(ca_f)}'", file=STDOUT_LIGHTGREEN)
+        p.disconnectStdout(ProcessPipeCallbacks[p][ca_f])
+        if p in ProcessPipeCallbacks:
+            del ProcessPipeCallbacks[p][ca_f]
+            if not ProcessPipeCallbacks[p]:
+                del ProcessPipeCallbacks[p]
 
 
 @Command(
@@ -529,31 +597,31 @@ def _disconnect_pipe(cmd: list[str], *_):
     description="Checks if the pipe is registered for the specified process",
     usage="% [process name] ..."
 )
-def _registered_pipe(cmd_ls: list[str], *_):
-    cmd: set[str] = set(cmd_ls)
-    if not cmd:
-        cmd = set(processes.keys())
+def _registered_pipe(cmd: list[str], *_):
 
-    add_line, get_lines = _build_list("Process", "Description", "Registered")
+    add_line, get_lines = _build_table("Process", "Description", "Registered")
 
-    for process_name in cmd.copy():
-        p = processes.get(process_name)
-        if p is None:
-            print(f"Process {process_name} not found", file=STDOUT_LIGHTYELLOW)
-            cmd.remove(process_name)
-            continue
+    p = None
+    for p in _validate_processes_name(cmd, default_to_all=True):
+        running_status: list[str] = []
+        if p not in ProcessPipeCallbacks:
+            running_status.append("Not registered")
+        else:
+            for file_name in ProcessPipeCallbacks[p]:
+                if file_name is None:
+                    running_status.insert(0, "Console")
+                    continue
+                running_status.append(f"File: '{file_name}'")
 
-        running_state = "Registered" if p.isConnectedStdout(_print_wrapper) else "Not registered"
-        add_line(process_name, p.description or "", running_state)
+        desc = p.description or ''
+        for state in running_status:
+            add_line(p.name, desc, state)
+            process_name, desc = '', ''
 
-    if not cmd:
+    if p is None:
         return
 
-    line_gen = get_lines()
-    print(*next(line_gen), sep="     ", file=STDOUT_LIGHTMAGENTA)
-    for line in line_gen:
-        print(end=' ')
-        print(*line, sep="     ", file=STDOUT_LIGHTMAGENTA)
+    _show_table(get_lines())
 
 
 @Command(
@@ -564,50 +632,29 @@ def _registered_pipe(cmd_ls: list[str], *_):
           "\n└ [-nf 'No flush]"
 )
 def _send_text(cmd: list[str], ca_t: str = '', cf_nf: bool = False, *_):
-    process_to_send = []
-    for name in set(cmd):
-        p = processes.get(name)
-        if p is None:
-            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
-            continue
+    def checker(pobj: SubprocessService):
+        if not pobj.running:
+            print(f"Process '{pobj.name}' is not running", file=STDOUT_LIGHTYELLOW)
+            return True
 
-        process_to_send.append(p)
-
-    for p in process_to_send:
-        if not p.running:
-            print(f"Process {p.name} is not running", file=STDOUT_LIGHTYELLOW)
-            continue
-
-        print(f"Sent to process {p.name}: {ca_t}", file=STDOUT_LIGHTGREEN)
+    for p in _validate_processes_name(cmd, checker):
+        print(f"Sending text '{ca_t}' to '{p.name}'", file=STDOUT_LIGHTGREEN)
         p.sendStdin(f"{ca_t}\n\r", not cf_nf)
 
 
 @Command("ps", description="Displays the status of the specified process", usage="% [process name] ...")
-def _print_status(cmd_ls: list[str], *_):
-    cmd: set[str] = set(cmd_ls)
-    if not cmd:
-        cmd = set(processes.keys())
+def _print_status(cmd: list[str], *_):
+    add_line, get_lines = _build_table("Process", "Alias", "Description", "Running")
 
-    add_line, get_lines = _build_list("Process", "Description", "Running")
-
-    for name in cmd.copy():
-        p = processes.get(name)
-        if p is None:
-            print(f"Process {name} not found", file=STDOUT_LIGHTYELLOW)
-            cmd.remove(name)
-            continue
-
+    p = None
+    for p in _validate_processes_name(cmd, default_to_all=True):
         running_state = "Running" if p.running else "Stopped"
-        add_line(name, p.description or "", running_state)
+        add_line(p.name, p.abbreviation or '', p.description or '', running_state)
 
-    if not cmd:
+    if p is None:
         return
 
-    line_gen = get_lines()
-    print(*next(line_gen), sep="     ", file=STDOUT_LIGHTMAGENTA)
-    for line in line_gen:
-        print(end=' ')
-        print(*line, sep="     ", file=STDOUT_LIGHTMAGENTA)
+    _show_table(get_lines())
 
 
 @Command(
@@ -618,7 +665,7 @@ def _print_status(cmd_ls: list[str], *_):
           "\n├ [-s 'Set auto-start]"
           "\n└ [-c 'Cancel auto-start]"
 )
-def _auto_start(cmd_ls: list[str], cf_l: bool = False, cf_s: bool = False, cf_c: bool = False):
+def _auto_start(cmd: list[str], cf_l: bool = False, cf_s: bool = False, cf_c: bool = False):
     flags: dict[str, bool] = {"-l": cf_l, "-s": cf_s, "-c": cf_c}
     flag_count = sum([x for x in flags.values()])
     if flag_count > 1:
@@ -628,54 +675,37 @@ def _auto_start(cmd_ls: list[str], cf_l: bool = False, cf_s: bool = False, cf_c:
         print("Use '? as' for help", file=STDOUT_LIGHTYELLOW)
         return
 
-    process_names: set[str] = set(cmd_ls)
-    if not process_names:
-        process_names = set(processes.keys())
-
     def _show_list():
-        add_line, get_lines = _build_list("Process", "Description", "Enable AutoStart")
-        for pname in process_names.copy():
-            pobj = processes.get(pname)
-            if pobj is None:
-                print(f"Process '{pname}' not found!", file=STDOUT_LIGHTYELLOW)
-                process_names.remove(pname)
-                continue
+        add_line, get_lines = _build_table("Process", "Description", "Enable AutoStart")
+
+        p = None
+        for p in _validate_processes_name(cmd, default_to_all=True):
             p_autostart = requireConfig(
                 '', "process.yaml",
-                {f"Register.{pobj.name}.auto_start": None | bool}
-            ).checkConfig(ignore_missing=True).get(f"Register.{pobj.name}.auto_start")
+                {f"Register.{p.name}.auto_start": None | bool}
+            ).checkConfig(ignore_missing=True).get(f"Register.{p.name}.auto_start")
             if p_autostart is None:
                 p_autostart = "Not defined!"
             elif isinstance(p_autostart, bool):
                 p_autostart = "Enabled" if p_autostart else "Disabled"
             else:
                 p_autostart = "Invalid value!"
-            add_line(pname, pobj.description, p_autostart if p_autostart is not None else "Not defined!")
+            add_line(p.name, p.description, p_autostart if p_autostart is not None else "Not defined!")
 
-        if not process_names:
+        if p is None:
             return
 
-        line_gen = get_lines()
-        print("     ".join(next(line_gen)), file=STDOUT_LIGHTMAGENTA)
-        for line in line_gen:
-            print(end=' ')
-            print("     ".join(line), file=STDOUT_LIGHTMAGENTA)
+        _show_table(get_lines())
 
     def _set():
-        for pname in process_names:
-            pobj = processes.get(pname)
-            if pobj is None:
-                print(f"Process '{pname}' not found!", file=STDOUT_LIGHTYELLOW)
-                continue
-            DefaultConfigPool.get('', "process.yaml").data.setPathValue(f"Register.{pobj.name}.auto_start", True)
+        for p in _validate_processes_name(cmd):
+            DefaultConfigPool.get('', "process.yaml").data.setPathValue(f"Register.{p.name}.auto_start", True)
+            print(f"Process {p.name} enabled auto-start", file=STDOUT_LIGHTGREEN)
 
     def _cancel():
-        for pname in process_names:
-            pobj = processes.get(pname)
-            if pobj is None:
-                print(f"Process '{pname}' not found!", file=STDOUT_LIGHTYELLOW)
-                continue
-            DefaultConfigPool.get('', "process.yaml").data.setPathValue(f"Register.{pobj.name}.auto_start", False)
+        for p in _validate_processes_name(cmd):
+            DefaultConfigPool.get('', "process.yaml").data.setPathValue(f"Register.{p.name}.auto_start", False)
+            print(f"Process {p.name} disabled auto-start", file=STDOUT_LIGHTGREEN)
 
     if cf_l:
         _show_list()
@@ -700,7 +730,7 @@ def _help(cmd_ls: list[str], *_):
     if not command_list:
         return
 
-    add_line, get_lines = _build_list("Command", "Description", "Usage")
+    add_line, get_lines = _build_table("Command", "Description", "Usage")
 
     for cmd, data in command_list.items():
         desc = data["description"]
@@ -708,11 +738,7 @@ def _help(cmd_ls: list[str], *_):
 
         add_line(cmd, desc, usage)
 
-    line_gen = get_lines()
-    print("     ".join(next(line_gen)), file=STDOUT_LIGHTMAGENTA)
-    for line in line_gen:
-        print(end=' ')
-        print("     ".join(line), file=STDOUT_LIGHTMAGENTA)
+    _show_table(get_lines())
 
 
 @Command("sc", description="Saves the current config to the config file", usage="%")
@@ -747,6 +773,14 @@ def _debug(*args, **kwargs):
 
         for color, file in colors.items():
             print(color, file=file)
+
+    if kwargs.get("ca_eval"):
+        for cmd in kwargs["ca_eval"]:
+            print(eval(cmd))
+
+    if kwargs.get("ca_exec"):
+        for cmd in kwargs["ca_exec"]:
+            print(exec(cmd))
 
 
 class ArgumentParsingError(CommandException):
