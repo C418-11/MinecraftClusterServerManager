@@ -6,7 +6,7 @@ from typing import Union
 from . import types
 
 
-class UserAlreadyExistError(Exception):
+class UserAlreadyExistsError(Exception):
     def __init__(self, *, user_name=None):
         self.user_name = user_name
 
@@ -62,7 +62,7 @@ class LeadCharNotFindError(CommandException):
 
 
 __all__ = (
-    "UserAlreadyExistError",
+    "UserAlreadyExistsError",
     "OperateLevelException",
     "DontHavePermissionError",
     "OperateLevelAlreadyExistError",

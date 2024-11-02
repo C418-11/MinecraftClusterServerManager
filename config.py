@@ -332,16 +332,16 @@ class ConfigData:
     def __getitem__(self, key):
         return self.getPathValue(key)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value) -> None:
         self.setPathValue(key, value)
 
-    def __delitem__(self, key):
+    def __delitem__(self, key) -> None:
         self.deletePath(key)
 
-    def __contains__(self, key):
+    def __contains__(self, key) -> bool:
         return self.hasPath(key)
 
-    def __getattr__(self, item):
+    def __getattr__(self, item) -> Self | Any:
         item_obj = self._data[item]
         return type(self)(item_obj) if isinstance(item_obj, Mapping) else item_obj
 
@@ -434,8 +434,8 @@ class RequiredKey:
 class ABCConfigPool(ABC):
     def __init__(self, root_path: str = "./.config"):
         self.root_path = root_path
-        self.SLProcessor: dict[str, ABCConfigSL] = {}
-        self.FileExtProcessor: dict[str, set[str]] = {}
+        self.SLProcessor: dict[str, ABCConfigSL] = {}  # SaveLoadProcessor {RegName: Processor}
+        self.FileExtProcessor: dict[str, set[str]] = {}  # {FileExt: {RegName}}
 
 
 class ABCConfig(ABC):

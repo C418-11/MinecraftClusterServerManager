@@ -14,9 +14,9 @@ AttributeError: partially initialized module 'command_tools.types_' has no attri
 to a circular import)
 """
 
-import pickle
+import json
 from typing import Union
-from typing import Tuple
+from typing import Self
 
 import numbers
 
@@ -129,7 +129,7 @@ class OperateLevelList:
     def __init__(self):
         self.level_list = {}
 
-    def append(self, op_level: Union[OperateLevel, Tuple[object, numbers.Real]]) -> None:
+    def append(self, op_level: Union[OperateLevel, tuple[object, numbers.Real]]) -> None:
         """
         :param op_level: 权限等级
         """
@@ -146,22 +146,25 @@ class OperateLevelList:
         else:
             raise errors.OperateLevelAlreadyExistError(level_name=level.name)
 
-    def save(self, file) -> None:
+    def save(self, file: str) -> None:
         """
         :param file: 文件路径
         """
-        if type(file) is str:
-            file = open(file, mode="wb")
-        pickle.dump(self, file)
 
-    @staticmethod
-    def load(file):
+        with open(file, mode="w", encoding="utf-8") as f:
+            json.dump(self.level_list, f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def load(cls, file: str) -> Self:
         """
         :param file: 文件路径
         """
-        if type(file) is str:
-            file = open(file, mode="rb")
-        return pickle.load(file)
+
+        with open(file, mode="r", encoding="utf-8") as f:
+            obj = cls()
+            obj.level_list = json.load(f)
+
+        return obj
 
     def __getitem__(self, item) -> OperateLevel:
         return self.level_list[item]
@@ -189,7 +192,7 @@ class UserList:
         except KeyError:
             self.user_list[user_name] = op_level
         else:
-            raise errors.UserAlreadyExistError(user_name=user_name)
+            raise errors.UserAlreadyExistsError(user_name=user_name)
 
     def __getitem__(self, item) -> OperateLevel:
         try:
@@ -209,22 +212,22 @@ class UserList:
         """
         self.user_list[user_name] = op_level
 
-    def save(self, file):
+    def save(self, file: str) -> None:
         """
         :param file: 文件路径
         """
-        if type(file) is str:
-            file = open(file, mode="wb")
-        pickle.dump(self, file)
+
+        with open(file, mode="w", encoding="utf-8") as f:
+            json.dump([self.default_level, self.user_list], f, ensure_ascii=False, indent=2)
 
     @classmethod
-    def load(cls, file):
+    def load(cls, file: str) -> Self:
         """
         :param file: 文件路径
         """
 
-        file = open(file, mode="rb")
-        try:
-            return pickle.load(file)
-        except EOFError:
-            raise FileNotFoundError
+        with open(file, mode="r", encoding="utf-8") as f:
+            obj = cls()
+            obj.default_level, obj.user_list = json.load(f)
+
+        return obj
