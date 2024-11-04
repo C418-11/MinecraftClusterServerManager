@@ -363,9 +363,8 @@ def _quit(_cmd, ca_t: float = 5, cf_e: bool = False, *_):
         except TimeoutError:
             print(f"Process '{p.name}' did not terminate within {timeout} seconds", file=STDOUT_LIGHTYELLOW)
 
-    for process in processes.values():
+    for process in {processes[x.name] for x in processes.values()}:
         if not process.running:
-            print(f"Process '{process.name}' is not running", file=STDOUT_YELLOW)
             continue
         if cf_e:
             print(f"Ending process '{process.name}' ({process.end_cmd})", file=STDOUT_LIGHTBLUE)
@@ -985,7 +984,7 @@ def main():
     start_processes()
     run_command = RunCommand(args_maker=_rc_args_maker, args_unpacker=_rc_args_unpacker)
 
-    for pobj in processes.values():
+    for pobj in {processes[x.name] for x in processes.values()}:
         if not pobj.process_config.get("auto_start"):
             continue
         try:
