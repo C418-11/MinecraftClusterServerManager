@@ -9,6 +9,7 @@ import inspect
 import os.path
 from abc import ABC
 from abc import abstractmethod
+from collections import OrderedDict
 from collections.abc import Mapping
 from collections.abc import MutableMapping
 from copy import deepcopy
@@ -22,6 +23,7 @@ from typing import Optional
 from typing import Self
 from typing import Sequence
 from typing import TypeVar
+from typing import override
 
 
 class ConfigOperate(Enum):
@@ -55,11 +57,11 @@ class RequiredKeyNotFoundError(KeyError):
         self.key = key
         self.current_key = current_key
         self.index = index
-        self.operate = operate
+        self.operate = ConfigOperate(operate)
 
     def __str__(self):
         string = f"{self.key} -> {self.current_key} ({self.index + 1} / {len(self.key.split('.'))})"
-        if self.operate.value is not None:
+        if self.operate.value is not ConfigOperate.Unknown:
             string += f" Operate: {self.operate.value}"
         return string
 
@@ -112,6 +114,30 @@ class UnsupportedConfigFormatError(Exception):
         self.format = _format
 
 
+class FailedProcessConfigFileError(Exception):
+    """
+    SL处理器无法正确处理当前配置文件
+    """
+
+    def __init__(self, reason: BaseException | Iterable[BaseException] | Mapping[str, BaseException]):
+        """
+        :param reason: 处理配置文件失败的原因
+        :type reason: BaseException | Iterable[BaseException] | Mapping[str, BaseException]
+        """
+
+        if isinstance(reason, Mapping):
+            reason = OrderedDict(reason)
+            super().__init__('\n'.join(map(lambda _: f"{_[0]}: {_[1]}", reason.items())))
+        elif isinstance(reason, Iterable):
+            reason = tuple(reason)
+            super().__init__('\n'.join(map(str, reason)))
+        else:
+            reason = (reason,)
+            super().__init__(str(reason))
+
+        self.reasons: tuple[BaseException] | OrderedDict[str, BaseException] = reason
+
+
 def _norm_join(*paths: str) -> str:
     return os.path.normpath(os.path.join(*paths))
 
@@ -133,20 +159,35 @@ class ConfigData:
 
     def __init__(self, data: D = None):
         """
+        data为None时，默认为空字典
+
+        如果data不继承自MutableMapping，则该配置数据被设为只读
+
         :param data: 配置的原始数据
         :type data: Mapping | MutableMapping
         """
         if data is None:
             data = {}
         self._data = deepcopy(data)
-        self._read_only = not isinstance(data, MutableMapping)
+        self._data_read_only: bool = not isinstance(data, MutableMapping)
+        self._read_only: bool = self._data_read_only
 
     @property
     def data(self) -> D:
         """
-        配置的原始数据
+        配置的原始数据*快照*
         """
         return deepcopy(self._data)
+
+    @property
+    def read_only(self) -> bool:
+        return self._data_read_only or self._read_only
+
+    @read_only.setter
+    def read_only(self, value: Any):
+        if self._data_read_only:
+            raise TypeError("ConfigData is read-only")
+        self._read_only = bool(value)
 
     def _process_path(self, path: str, process_check: Callable, process_return: Callable) -> Any:
         """
@@ -184,7 +225,7 @@ class ConfigData:
 
     def getPathValue(self, path: str, *, get_raw: bool = False) -> Any:
         """
-        获取路径的值
+        获取路径的值的*快照*
 
         :param path: 路径
         :type path: str
@@ -218,6 +259,9 @@ class ConfigData:
         """
         设置路径的值
 
+        .. warning::
+           value参数未默认做深拷贝，可能导致非预期的行为
+
         :param path: 路径
         :type path: str
         :param value: 值
@@ -231,7 +275,7 @@ class ConfigData:
         :raise ConfigDataTypeError: 配置数据类型错误
         :raise RequiredKeyNotFoundError: 需求的键不存在
         """
-        if self._read_only:
+        if self.read_only:
             raise TypeError("Config data is read-only")
 
         def checker(now_data, now_path, last_path, path_index):
@@ -261,7 +305,7 @@ class ConfigData:
         :raise ConfigDataTypeError: 配置数据类型错误
         :raise RequiredKeyNotFoundError: 需求的键不存在
         """
-        if self._read_only:
+        if self.read_only:
             raise TypeError("Config data is read-only")
 
         def checker(now_data, now_path, last_path, path_index):
@@ -324,10 +368,12 @@ class ConfigData:
         return self._data.keys()
 
     def values(self):
-        return [(type(self)(x) if isinstance(x, Mapping) else x) for x in self._data.values()]
+        copied_values = [deepcopy(x) for x in self._data.values()]
+        return [(type(self)(x) if isinstance(x, Mapping) else x) for x in copied_values]
 
     def items(self):
-        return [(k, (type(self)(v) if isinstance(v, Mapping) else v)) for k, v in self._data.items()]
+        copied_items = [(deepcopy(k), deepcopy(v)) for k, v in self._data.items()]
+        return [(k, (type(self)(v) if isinstance(v, Mapping) else v)) for k, v in copied_items]
 
     def __getitem__(self, key):
         return self.getPathValue(key)
@@ -348,12 +394,17 @@ class ConfigData:
     def __iter__(self):
         return iter(self._data)
 
-    def __repr__(self):
-        data_str = f"{self._data!r}"[1:-1]
+    def __str__(self) -> str:
+        return str(self._data)
 
-        return f"{self.__class__.__name__}({data_str})"
+    def __repr__(self) -> str:
+        data_repr = f"{self._data!r}"
+        if type(self) is dict:
+            data_repr = data_repr[1:-1]
 
-    def __deepcopy__(self, memo):
+        return f"{self.__class__.__name__}({data_repr})"
+
+    def __deepcopy__(self, memo) -> Self:
         return type(self)(deepcopy(self._data, memo))
 
 
@@ -365,11 +416,13 @@ class RequiredKey:
 
     def __init__(self, paths: Iterable[str] | Mapping[str, Any]):
         """
-        当paths为Mapping时
-        value会被作为key不存在时的默认值返回，在key存在时会进行isinstance(data, type(value))检查
-        如果type(value) is type也就是默认值是类型时，会直接使用类型做检查且不会填充默认值
+        当paths为Mapping时{key: value}
 
-        :param paths: 路径
+        value会被作为key不存在时的*默认值*填充，在key存在时会进行isinstance(data, type(value))检查
+
+        如果type(value) is type也就是*默认值*是类型时，会将其直接用作类型检查issubclass(data, value)且不会尝试填充默认值
+
+        :param paths: 需求的路径
         :type paths: Iterable[str] | Mapping[str, Any]
         """
 
@@ -380,16 +433,17 @@ class RequiredKey:
         """
         检查过滤需求的键
 
-        !! 对该方法返回的值进行修改不会同步到原始数据 !!
+        .. note::
+           返回的配置数据是*快照*
 
         :param data: 要过滤的原始数据
         :type data: ConfigData
-        :param allow_create: 是否允许在值不存在时将值添加到原始数据中
+        :param allow_create: 是否允许值不存在时修改data参数对象填充默认值(即使为False仍然会在结果中填充默认值,但不会修改data参数对象)
         :type allow_create: bool
         :param ignore_missing: 忽略丢失的键
         :type ignore_missing: bool
 
-        :return: 处理后的配置数据
+        :return: 处理后的配置数据*快照*
         :rtype: Any
         """
         result = type(data)()
@@ -595,7 +649,6 @@ class ABCConfigSL(ABC):
         """
         :return: SL处理器的注册名
         """
-        ...
 
     @property
     @abstractmethod
@@ -603,7 +656,6 @@ class ABCConfigSL(ABC):
         """
         :return: 支持的文件扩展名
         """
-        ...
 
     def registerTo(self, config_pool: ABCConfigPool = None) -> None:
         """
@@ -650,8 +702,9 @@ class ABCConfigSL(ABC):
 
         :return: None
         :rtype: None
+
+        :raise FailedProcessConfigFileError: 处理配置文件失败
         """
-        ...
 
     @abstractmethod
     def load(
@@ -674,8 +727,12 @@ class ABCConfigSL(ABC):
         :type namespace: Optional[str]
         :param file_name: 配置文件名
         :type file_name: Optional[str]
+
+        :return: 配置对象
+        :rtype: C
+
+        :raise FailedProcessConfigFileError: 处理配置文件失败
         """
-        ...
 
     def _getFilePath(
             self,
@@ -721,6 +778,7 @@ class Config(ABCConfig):
     配置类
     """
 
+    @override
     def save(
             self,
             config_pool: ABCConfigPool,
@@ -749,6 +807,7 @@ class Config(ABCConfig):
         )
 
     @classmethod
+    @override
     def load(
             cls,
             config_pool: ABCConfigPool,
@@ -779,19 +838,26 @@ yaml: ModuleType
 
 class SimpleYamlSL(ABCConfigSL):
     @property
+    @override
     def regName(self) -> str:
         return "yaml"
 
     @property
+    @override
     def fileExt(self) -> list[str]:
         return [".yaml"]
 
     @classmethod
+    @override
     def enable(cls):
+        """
+        pip install pyyaml
+        """
         global yaml
         import yaml
         yaml = yaml
 
+    @override
     def save(
             self,
             config: ABCConfig,
@@ -809,8 +875,9 @@ class SimpleYamlSL(ABCConfigSL):
             try:
                 yaml.safe_dump(config.data.data, f, *new_args, **new_kwargs)
             except yaml.YAMLError as e:
-                raise UnsupportedConfigFormatError(self.regName) from e
+                raise FailedProcessConfigFileError(e) from e
 
+    @override
     def load(
             self,
             config_cls: type[C],
@@ -820,11 +887,11 @@ class SimpleYamlSL(ABCConfigSL):
             *args,
             **kwargs
     ) -> C:
-        with open(_norm_join(root_path, namespace, file_name), "r", encoding="utf-8") as f:
+        with open(_norm_join(root_path, namespace, file_name), 'r', encoding="utf-8") as f:
             try:
                 data = yaml.safe_load(f)
             except yaml.YAMLError as e:
-                raise UnsupportedConfigFormatError(self.regName) from e
+                raise FailedProcessConfigFileError(e) from e
 
         obj = config_cls(ConfigData(data))
         obj.namespace = namespace
@@ -840,19 +907,23 @@ json: ModuleType
 class JsonSL(ABCConfigSL):
 
     @property
+    @override
     def regName(self) -> str:
         return "json"
 
     @property
+    @override
     def fileExt(self) -> list[str]:
         return [".json"]
 
     @classmethod
+    @override
     def enable(cls):
         global json
         import json
         json = json
 
+    @override
     def save(
             self,
             config: ABCConfig,
@@ -870,8 +941,9 @@ class JsonSL(ABCConfigSL):
             try:
                 json.dump(config.data.data, f, *new_args, **new_kwargs)
             except TypeError as e:
-                raise UnsupportedConfigFormatError(self.regName) from e
+                raise FailedProcessConfigFileError(e) from e
 
+    @override
     def load(
             self,
             config_cls: type[C],
@@ -888,7 +960,7 @@ class JsonSL(ABCConfigSL):
             try:
                 data = json.load(f, *new_args, **new_kwargs)
             except json.DecodeError as e:
-                raise UnsupportedConfigFormatError(self.regName) from e
+                raise FailedProcessConfigFileError(e) from e
 
         obj = config_cls(ConfigData(data))
         obj.namespace = namespace
@@ -953,15 +1025,14 @@ class ConfigPool(ABCConfigPool):
         self._configs[namespace][file_name] = config
 
     def saveAll(self, ignore_err: bool = False) -> None | dict[str, dict[str, tuple[ABCConfig, Exception]]]:
-        # noinspection GrazieInspection
         """
         保存所有配置
 
         :param ignore_err: 是否忽略保存导致的错误
         :type ignore_err: bool
 
-        :return: None
-        :rtype: None
+        :return: ignore_err为True时返回{Namespace: {FileName: (ConfigObj, Exception)}}，否则返回None
+        :rtype: None | dict[str, dict[str, tuple[ABCConfig, Exception]]]
         """
         errors = {}
         for namespace, configs in self._configs.items():
@@ -1085,17 +1156,17 @@ class RequireConfigDecorator:
                 config_pool.set(namespace, raw_file_name, result)
             return result
 
-        e = None
+        errors = {}
         for f in format_set:
             try:
                 ret = _load_config(f)
-            except UnsupportedConfigFormatError as err:
-                e = err
+            except FailedProcessConfigFileError as err:
+                errors[f] = err
                 continue
             config: ABCConfig = ret
             break
         else:
-            raise UnsupportedConfigFormatError(", ".join(format_set)) from e  # todo
+            raise FailedProcessConfigFileError(errors)
 
         if filter_kwargs is None:
             filter_kwargs = {}
@@ -1149,6 +1220,7 @@ __all__ = (
     "RequiredKeyNotFoundError",
     "ConfigDataTypeError",
     "UnsupportedConfigFormatError",
+    "FailedProcessConfigFileError",
 
     "ConfigData",
     "RequiredKey",
