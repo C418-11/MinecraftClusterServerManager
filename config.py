@@ -14,7 +14,6 @@ from collections.abc import Mapping
 from collections.abc import MutableMapping
 from copy import deepcopy
 from enum import Enum
-from types import ModuleType
 from types import UnionType
 from typing import Any
 from typing import Callable
@@ -888,9 +887,6 @@ class Config(ABCConfig):
         )
 
 
-yaml: ModuleType
-
-
 class SimpleYamlSL(ABCConfigSL):
     @property
     @override
@@ -908,9 +904,9 @@ class SimpleYamlSL(ABCConfigSL):
         """
         pip install pyyaml
         """
-        global yaml
+        # noinspection PyPackageRequirements
         import yaml
-        yaml = yaml
+        cls.yaml = yaml
 
     @override
     def save(
@@ -928,8 +924,8 @@ class SimpleYamlSL(ABCConfigSL):
         file_path = self._getFilePath(config, root_path, namespace, file_name)
         with open(file_path, "w", encoding="utf-8") as f:
             try:
-                yaml.safe_dump(config.data.data, f, *new_args, **new_kwargs)
-            except yaml.YAMLError as e:
+                self.yaml.safe_dump(config.data.data, f, *new_args, **new_kwargs)
+            except Exception as e:
                 raise FailedProcessConfigFileError(e) from e
 
     @override
@@ -944,15 +940,71 @@ class SimpleYamlSL(ABCConfigSL):
     ) -> C:
         with open(_norm_join(root_path, namespace, file_name), 'r', encoding="utf-8") as f:
             try:
-                data = yaml.safe_load(f)
-            except yaml.YAMLError as e:
+                data = self.yaml.safe_load(f)
+            except Exception as e:
                 raise FailedProcessConfigFileError(e) from e
         obj = config_cls(ConfigData(data), namespace=namespace, file_name=file_name, config_format=self.regName)
 
         return obj
 
 
-json: ModuleType
+class RuamelYamlSL(ABCConfigSL):
+
+    @property
+    @override
+    def regName(self) -> str:
+        return "ruamel_yaml"
+
+    @property
+    @override
+    def fileExt(self) -> list[str]:
+        return [".yaml"]
+
+    @classmethod
+    @override
+    def enable(cls):
+        """
+        pip install ruamel.yaml
+        """
+        # noinspection PyPackageRequirements
+        from ruamel.yaml import YAML
+        cls.yaml = YAML(typ="rt", pure=True)
+
+    def save(
+            self,
+            config: ABCConfig,
+            root_path: str,
+            namespace: Optional[str],
+            file_name: Optional[str],
+            *args,
+            **kwargs
+    ) -> None:
+        file_path = self._getFilePath(config, root_path, namespace, file_name)
+        with open(file_path, "w", encoding="utf-8") as f:
+            try:
+                self.yaml.dump(config.data.data, f)
+            except Exception as e:
+                raise FailedProcessConfigFileError(e) from e
+
+    def load(
+            self,
+            config_cls: type[C],
+            root_path: str,
+            namespace: Optional[str],
+            file_name: Optional[str],
+            *args,
+            **kwargs
+    ) -> C:
+
+        with open(_norm_join(root_path, namespace, file_name), 'r', encoding="utf-8") as f:
+            try:
+                data = self.yaml.load(f)
+            except Exception as e:
+                raise FailedProcessConfigFileError(e) from e
+
+        obj = config_cls(ConfigData(data), namespace=namespace, file_name=file_name, config_format=self.regName)
+
+        return obj
 
 
 class JsonSL(ABCConfigSL):
@@ -970,9 +1022,8 @@ class JsonSL(ABCConfigSL):
     @classmethod
     @override
     def enable(cls):
-        global json
         import json
-        json = json
+        cls.json = json
 
     @override
     def save(
@@ -990,8 +1041,8 @@ class JsonSL(ABCConfigSL):
         file_path = self._getFilePath(config, root_path, namespace, file_name)
         with open(file_path, "w", encoding="utf-8") as f:
             try:
-                json.dump(config.data.data, f, *new_args, **new_kwargs)
-            except TypeError as e:
+                self.json.dump(config.data.data, f, *new_args, **new_kwargs)
+            except Exception as e:
                 raise FailedProcessConfigFileError(e) from e
 
     @override
@@ -1009,8 +1060,8 @@ class JsonSL(ABCConfigSL):
 
         with open(_norm_join(root_path, namespace, file_name), "r", encoding="utf-8") as f:
             try:
-                data = json.load(f, *new_args, **new_kwargs)
-            except json.DecodeError as e:
+                data = self.json.load(f, *new_args, **new_kwargs)
+            except Exception as e:
                 raise FailedProcessConfigFileError(e) from e
 
         obj = config_cls(ConfigData(data), namespace=namespace, file_name=file_name, config_format=self.regName)
@@ -1276,6 +1327,7 @@ __all__ = (
     "ABCConfigSL",
     "Config",
     "SimpleYamlSL",
+    "RuamelYamlSL",
     "JsonSL",
     "ConfigPool",
     "RequireConfigDecorator",
