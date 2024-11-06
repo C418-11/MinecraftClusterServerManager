@@ -31,11 +31,11 @@ from command_tools import DefaultCommandList
 from command_tools import RunCommand
 from config import ConfigData
 from config import DefaultConfigPool
-from config import SimpleYamlSL
+from config import RuamelYamlSL
 from config import requireConfig
 
-SimpleYamlSL.enable()
-SimpleYamlSL().registerTo()
+RuamelYamlSL.enable()
+RuamelYamlSL().registerTo()
 
 default_config = {
     "process": {
