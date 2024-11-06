@@ -245,6 +245,13 @@ class SubprocessService:
         else:
             self.sendStdin(f"{self._end_cmd}\n")
 
+    def kill(self):
+        if not self._running:
+            raise RuntimeError("Process not running")
+
+        print(sys.platform)
+        self._process.kill()
+
     def join(self, timeout: float | None = None):
         if self._process is not None:
             try:
@@ -448,13 +455,17 @@ def _end(cmd: list[str], *_):
 
 
 @Command("k", description="Kills the specified process", usage="% <'*' | process name> ...")
-def _kill(cmd: list[str], *_):
+def _kill(cmd: list[str], cf_f: bool = False):
     def checker(pobj: SubprocessService):
         if not pobj.running:
             print(f"Process '{pobj.name}' is not running", file=STDOUT_YELLOW)
             return True
 
     for p in _validate_processes_name(cmd, checker):
+        if cf_f:
+            print(f"Force to kill process '{p.name}'", file=STDOUT_LIGHTYELLOW)
+            p.kill()
+            continue
         print(f"Killing process '{p.name}'", file=STDOUT_LIGHTGREEN)
         p.stop()
 
