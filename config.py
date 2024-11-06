@@ -41,10 +41,19 @@ class RequiredKeyNotFoundError(KeyError):
     需求的键未找到错误
     """
 
-    def __init__(self, key: str, current_key: str, index: int, operate: ConfigOperate = ConfigOperate.Unknown):
+    def __init__(
+            self,
+            key: str,
+            sep_char: str,
+            current_key: str,
+            index: int,
+            operate: ConfigOperate = ConfigOperate.Unknown,
+    ):
         """
         :param key: 完整键路径
         :type key: str
+        :param sep_char: 键路径的分隔符
+        :type sep_char: str
         :param current_key: 当前正在访问的键
         :type current_key: str
         :param index: 当前访问的键在完整键路径中的索引
@@ -55,12 +64,13 @@ class RequiredKeyNotFoundError(KeyError):
         super().__init__(current_key)
 
         self.key = key
+        self.sep_char = sep_char
         self.current_key = current_key
         self.index = index
         self.operate = ConfigOperate(operate)
 
     def __str__(self):
-        string = f"{self.key} -> {self.current_key} ({self.index + 1} / {len(self.key.split('.'))})"
+        string = f"{self.key} -> {self.current_key} ({self.index + 1} / {len(self.key.split(self.sep_char))})"
         if self.operate.value is not ConfigOperate.Unknown:
             string += f" Operate: {self.operate.value}"
         return string
@@ -71,10 +81,20 @@ class ConfigDataTypeError(TypeError):
     配置数据类型错误
     """
 
-    def __init__(self, key: str, current_key: str, index: int, required_type: type[object], now_type: type[object]):
+    def __init__(
+            self,
+            key: str,
+            sep_char: str,
+            current_key: str,
+            index: int,
+            required_type: type[object],
+            now_type: type[object],
+    ):
         """
         :param key: 完整键路径
         :type key: str
+        :param sep_char: 键路径的分隔符
+        :type sep_char: str
         :param current_key: 当前正在访问的键
         :type current_key: str
         :param index: 当前访问的键在完整键路径中的索引
@@ -87,6 +107,7 @@ class ConfigDataTypeError(TypeError):
         super().__init__(current_key)
 
         self.key = key
+        self.sep_char = sep_char
         self.current_key = current_key
         self.index = index
         self.requited_type = required_type
@@ -94,7 +115,7 @@ class ConfigDataTypeError(TypeError):
 
     def __str__(self):
         return (
-            f"{self.key} -> {self.current_key} ({self.index + 1} / {len(self.key.split('.'))})"
+            f"{self.key} -> {self.current_key} ({self.index + 1} / {len(self.key.split(self.sep_char))})"
             f" Must be '{self.requited_type}'"
             f", Not '{self.now_type}'"
         )
@@ -157,7 +178,7 @@ class ConfigData:
     配置数据
     """
 
-    def __init__(self, data: D = None):
+    def __init__(self, data: D = None, sep_char: str = '.'):
         """
         data为None时，默认为空字典
 
@@ -172,6 +193,8 @@ class ConfigData:
         self._data_read_only: bool = not isinstance(data, MutableMapping)
         self._read_only: bool = self._data_read_only
 
+        self._sep_char: str = sep_char
+
     @property
     def data(self) -> D:
         """
@@ -183,6 +206,10 @@ class ConfigData:
     def read_only(self) -> bool:
         return self._data_read_only or self._read_only
 
+    @property
+    def sep_char(self) -> str:
+        return self._sep_char
+
     @read_only.setter
     def read_only(self, value: Any):
         if self._data_read_only:
@@ -191,7 +218,7 @@ class ConfigData:
 
     def _process_path(self, path: str, process_check: Callable, process_return: Callable) -> Any:
         """
-        处理键路径的通用函数
+        处理键路径的通用函数阿
 
         :param path: 键路径
         :type path: str
@@ -211,7 +238,7 @@ class ConfigData:
         while last_path:
             path_index += 1
             try:
-                now_path, last_path = last_path.split('.', maxsplit=1)
+                now_path, last_path = last_path.split(self._sep_char, maxsplit=1)
             except ValueError:
                 now_path, last_path = last_path, None
 
@@ -241,9 +268,9 @@ class ConfigData:
 
         def checker(now_data, now_path, _last_path, path_index):
             if not isinstance(now_data, Mapping):
-                raise ConfigDataTypeError(path, now_path, path_index, Mapping, type(now_data))
+                raise ConfigDataTypeError(path, self._sep_char, now_path, path_index, Mapping, type(now_data))
             if now_path not in now_data:
-                raise RequiredKeyNotFoundError(path, now_path, path_index, ConfigOperate.Read)
+                raise RequiredKeyNotFoundError(path, self._sep_char, now_path, path_index, ConfigOperate.Read)
 
         def process_return(now_data):
             if get_raw:
@@ -280,10 +307,10 @@ class ConfigData:
 
         def checker(now_data, now_path, last_path, path_index):
             if not isinstance(now_data, MutableMapping):
-                raise ConfigDataTypeError(path, now_path, path_index, MutableMapping, type(now_data))
+                raise ConfigDataTypeError(path, self._sep_char, now_path, path_index, MutableMapping, type(now_data))
             if now_path not in now_data:
                 if not allow_create:
-                    raise RequiredKeyNotFoundError(path, now_path, path_index, ConfigOperate.Write)
+                    raise RequiredKeyNotFoundError(path, self._sep_char, now_path, path_index, ConfigOperate.Write)
                 now_data[now_path] = {}
 
             if last_path is None:
@@ -310,9 +337,9 @@ class ConfigData:
 
         def checker(now_data, now_path, last_path, path_index):
             if not isinstance(now_data, MutableMapping):
-                raise ConfigDataTypeError(path, now_path, path_index, MutableMapping, type(now_data))
+                raise ConfigDataTypeError(path, self._sep_char, now_path, path_index, MutableMapping, type(now_data))
             if now_path not in now_data:
-                raise RequiredKeyNotFoundError(path, now_path, path_index, ConfigOperate.Delete)
+                raise RequiredKeyNotFoundError(path, self._sep_char, now_path, path_index, ConfigOperate.Delete)
 
             if last_path is None:
                 del now_data[now_path]
@@ -336,7 +363,7 @@ class ConfigData:
 
         def checker(now_data, now_path, _last_path, path_index):
             if not isinstance(now_data, Mapping):
-                raise ConfigDataTypeError(path, now_path, path_index, Mapping, type(now_data))
+                raise ConfigDataTypeError(path, self._sep_char, now_path, path_index, Mapping, type(now_data))
             if now_path not in now_data:
                 return False
 
@@ -386,6 +413,11 @@ class ConfigData:
 
     def __contains__(self, key) -> bool:
         return self.hasPath(key)
+
+    def __eq__(self, other):
+        if not isinstance(other, type(self)):
+            return NotImplemented
+        return self._data == other._data
 
     def __getattr__(self, item) -> Self | Any:
         item_obj = self._data[item]
@@ -477,8 +509,10 @@ class RequiredKey:
                 value = value.data
 
             if not isinstance(value, _type):
-                path_chunks = path.split('.')
-                raise ConfigDataTypeError(path, path_chunks[-1], len(path_chunks) - 1, _type, type(value))
+                path_chunks = path.split(data.sep_char)
+                raise ConfigDataTypeError(
+                    path, data.sep_char, path_chunks[-1], len(path_chunks) - 1, _type, type(value)
+                )
 
             result[path] = value
 
@@ -516,11 +550,27 @@ class ABCConfig(ABC):
         :type config_format: Optional[str]
         """
 
-        self.data: ConfigData = config_data
+        self._data: ConfigData = config_data
 
-        self.namespace: str | None = namespace
-        self.file_name: str | None = file_name
-        self.config_format: str | None = config_format
+        self._namespace: str | None = namespace
+        self._file_name: str | None = file_name
+        self._config_format: str | None = config_format
+
+    @property
+    def data(self) -> ConfigData:
+        return self._data
+
+    @property
+    def namespace(self) -> str | None:
+        return self._namespace
+
+    @property
+    def file_name(self) -> str | None:
+        return self._file_name
+
+    @property
+    def config_format(self) -> str | None:
+        return self._config_format
 
     @abstractmethod
     def save(
@@ -546,7 +596,6 @@ class ABCConfig(ABC):
 
         :raise UnsupportedConfigFormatError: 不支持的配置格式
         """
-        ...
 
     @classmethod
     @abstractmethod
@@ -576,32 +625,38 @@ class ABCConfig(ABC):
 
         :raise UnsupportedConfigFormatError: 不支持的配置格式
         """
-        ...
 
     def __getitem__(self, key: str) -> Any:
-        return self.data[key]
+        return self._data[key]
 
     def __setitem__(self, key: str, value: Any) -> None:
-        self.data[key] = value
+        self._data[key] = value
 
     def __delitem__(self, key: str) -> None:
-        del self.data[key]
+        del self._data[key]
 
     def __contains__(self, key: str) -> bool:
-        return key in self.data
+        return key in self._data
+
+    def __eq__(self, other):
+        if not isinstance(other, type(self)):
+            return NotImplemented
+
+        for field in ["_config_format", "_data", "_namespace", "_file_name"]:
+            if getattr(self, field) != getattr(other, field):
+                return False
+        return True
 
     def __repr__(self):
-        field_str: str = ''
-        for field in ["config_format", "data", "namespace", "file_name"]:
+        fmt_str: list[str] = []
+        for field in ["_config_format", "_data", "_namespace", "_file_name"]:
             field_value = getattr(self, field)
             if field_value is None:
                 continue
 
-            field_str += f", {field}={field_value!r}"
+            fmt_str.append(f"{field[1:]}={field_value!r}")
 
-        field_str = field_str[2:]
-
-        return f"{self.__class__.__name__}({field_str})"
+        return f"{self.__class__.__name__}({", ".join(fmt_str)})"
 
 
 SLArgument = Sequence | Mapping | tuple[Sequence, Mapping[str, Any]]
@@ -790,7 +845,7 @@ class Config(ABCConfig):
     ) -> None:
 
         if config_format is None:
-            config_format = self.config_format
+            config_format = self._config_format
 
         if config_format is None:
             raise UnsupportedConfigFormatError("Unknown")
@@ -892,11 +947,7 @@ class SimpleYamlSL(ABCConfigSL):
                 data = yaml.safe_load(f)
             except yaml.YAMLError as e:
                 raise FailedProcessConfigFileError(e) from e
-
-        obj = config_cls(ConfigData(data))
-        obj.namespace = namespace
-        obj.file_name = file_name
-        obj.config_format = self.regName
+        obj = config_cls(ConfigData(data), namespace=namespace, file_name=file_name, config_format=self.regName)
 
         return obj
 
@@ -962,10 +1013,7 @@ class JsonSL(ABCConfigSL):
             except json.DecodeError as e:
                 raise FailedProcessConfigFileError(e) from e
 
-        obj = config_cls(ConfigData(data))
-        obj.namespace = namespace
-        obj.file_name = file_name
-        obj.config_format = self.regName
+        obj = config_cls(ConfigData(data), namespace=namespace, file_name=file_name, config_format=self.regName)
 
         return obj
 
