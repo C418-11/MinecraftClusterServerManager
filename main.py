@@ -454,7 +454,12 @@ def _end(cmd: list[str], *_):
         p.end()
 
 
-@Command("k", description="Kills the specified process", usage="% <'*' | process name> ...")
+@Command(
+    "k",
+    description="Kills the specified process",
+    usage="% <'*' | process name> ...\n"
+          "└ [-f 'Force to kill process]"
+)
 def _kill(cmd: list[str], cf_f: bool = False):
     def checker(pobj: SubprocessService):
         if not pobj.running:
