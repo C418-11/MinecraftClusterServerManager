@@ -995,7 +995,6 @@ class RuamelYamlSL(ABCConfigSL):
             *args,
             **kwargs
     ) -> C:
-
         with open(_norm_join(root_path, namespace, file_name), 'r', encoding="utf-8") as f:
             try:
                 data = self.yaml.load(f)

@@ -29,10 +29,10 @@ from command_tools import Command
 from command_tools import CommandException
 from command_tools import DefaultCommandList
 from command_tools import RunCommand
-from config import ConfigData
-from config import DefaultConfigPool
-from config import RuamelYamlSL
-from config import requireConfig
+from Config import ConfigData
+from Config import DefaultConfigPool
+from Config import RuamelYamlSL
+from Config import requireConfig
 
 RuamelYamlSL.enable()
 RuamelYamlSL().registerTo()
