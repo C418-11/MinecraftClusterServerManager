@@ -22,6 +22,10 @@ from typing import Generator
 from weakref import WeakKeyDictionary
 
 import colorama
+from C41811.Config import ConfigData
+from C41811.Config import DefaultConfigPool
+from C41811.Config import requireConfig
+from C41811.Config.SLProcessors.ruamel_yaml import RuamelYamlSL
 
 from StdColor import ColorWrite
 from buffer import StringBuffer
@@ -29,13 +33,8 @@ from command_tools import Command
 from command_tools import CommandException
 from command_tools import DefaultCommandList
 from command_tools import RunCommand
-from Config import ConfigData
-from Config import DefaultConfigPool
-from Config import RuamelYamlSL
-from Config import requireConfig
 
-RuamelYamlSL.enable()
-RuamelYamlSL().registerTo()
+RuamelYamlSL().registerTo(DefaultConfigPool)
 
 default_config = {
     "process": {
@@ -111,7 +110,7 @@ class SubprocessService:
         process_config: ConfigData = requireConfig(
             '', "process.yaml", {
                 f"Register.{service_name}": dict,
-                f"Register.{service_name}.cmd": list | str,
+                f"Register.{service_name}.cmd": list[str] | str,
                 f"Register.{service_name}.workdir": '.',
             }
         ).checkConfig()[f"Register.{service_name}"]
