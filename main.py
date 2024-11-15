@@ -8,6 +8,7 @@ import codecs
 import functools
 import inspect
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -682,9 +683,12 @@ def _auto_start(cmd: list[str], cf_l: bool = False, cf_s: bool = False, cf_c: bo
     flag_count = sum([x for x in flags.values()])
     if flag_count > 1:
         flags_string = ', '.join(filter(lambda x: flags[x], flags.keys()))
-        raise ArgumentParsingError(flags_string, f"Only one of {', '.join(flags.keys())} can be used at a time")
+        raise ArgumentParsingError(
+            flags_string,
+            f"Only one of '{', '.join(flags.keys())}' can be used at a time"
+        )
     elif flag_count == 0:
-        print("Use '? as' for help", file=STDOUT_LIGHTYELLOW)
+        print("Use '?as' for help", file=STDOUT_LIGHTYELLOW)
         return
 
     def _show_list():
@@ -712,12 +716,12 @@ def _auto_start(cmd: list[str], cf_l: bool = False, cf_s: bool = False, cf_c: bo
     def _set():
         for p in _validate_processes_name(cmd):
             DefaultConfigPool.get('', "process.yaml").data.setPathValue(f"Register.{p.name}.auto_start", True)
-            print(f"Process {p.name} enabled auto-start", file=STDOUT_LIGHTGREEN)
+            print(f"Process '{p.name}' enabled auto-start", file=STDOUT_LIGHTGREEN)
 
     def _cancel():
         for p in _validate_processes_name(cmd):
             DefaultConfigPool.get('', "process.yaml").data.setPathValue(f"Register.{p.name}.auto_start", False)
-            print(f"Process {p.name} disabled auto-start", file=STDOUT_LIGHTGREEN)
+            print(f"Process '{p.name}' disabled auto-start", file=STDOUT_LIGHTGREEN)
 
     if cf_l:
         _show_list()
@@ -728,7 +732,7 @@ def _auto_start(cmd: list[str], cf_l: bool = False, cf_s: bool = False, cf_c: bo
 
 
 @Command("?", description="Displays the description and usage of the specified command", usage="% [command] ...")
-def _help(cmd_ls: list[str], *_):
+def _help(cmd_ls: list[str], **kwargs):
     if not cmd_ls:
         command_list: dict = DefaultCommandList.data
     else:
@@ -737,19 +741,60 @@ def _help(cmd_ls: list[str], *_):
             try:
                 command_list |= {c: DefaultCommandList[c]}
             except KeyError:
-                print(f"Command {c} not found", file=STDOUT_LIGHTYELLOW)
+                print(f"Command '{c}' not found", file=STDOUT_LIGHTYELLOW)
 
     if not command_list:
         return
 
+    def _parse_usage(usage_desc: str) -> dict[str, str]:
+        usage_data = {}
+        for line in usage_desc.split('\n'):
+            result = re.match(r"[├└] \[(-.*) '(.*)]", line)
+            if not result:
+                continue
+            usage_data[result.group(1)] = result.group(2)
+        return usage_data
+
+    for k in kwargs.copy():
+        if k.startswith("ca_"):
+            kwargs[f"--{k[3:]}"] = kwargs.pop(k)
+        elif k.startswith("cf_"):
+            kwargs[f"-{k[3:]}"] = kwargs.pop(k)
+
     add_line, get_lines = _build_table("Command", "Description", "Usage")
-
-    for cmd, data in command_list.items():
+    commands = deepcopy(command_list)
+    for cmd, data in commands.copy().items():
         desc = data["description"]
-        usage = data["usage"]
+        usage: str = data["usage"]
 
-        add_line(cmd, desc, usage)
+        if not kwargs:
+            add_line(cmd, desc, usage)
+            continue
 
+        flags_and_args = _parse_usage(usage)
+        for k in kwargs.copy():
+            if k in flags_and_args:
+                continue
+            if not cmd_ls:
+                continue
+            flag_or_arg = "argument" if k.startswith("--") else "flag"
+            print(f"In command '{cmd}', no {flag_or_arg} '{k}' found", file=STDOUT_LIGHTYELLOW)
+            return
+
+        build_usage: list[str] = [
+            f"├ [{k} '{v}]" for k, v in flags_and_args.items() if k in kwargs
+        ]
+        if not build_usage:
+            del commands[cmd]
+            continue
+        build_usage.insert(0, '...')
+        build_usage[-1] = '└' + build_usage[-1][1:]
+
+        add_line(cmd, desc, '\n'.join(build_usage))
+
+    if not commands:
+        print("No commands found", file=STDOUT_LIGHTYELLOW)
+        return
     _show_table(get_lines())
 
 
@@ -807,7 +852,7 @@ def _rc_args_maker(string: str | Any, *_, **__):
     if type(string) is not str:
         return string
 
-    raw_ls: list[str | None] = string.split(' ')
+    raw_ls: list[str | None] = _rc_cut_rule(string)
     flags: list[str] = []
     arguments: dict[str, list[str]] = {}
 
@@ -995,9 +1040,22 @@ def _rc_args_unpacker(*args, func, **kwargs):
     return func(cmd[1:], *args, **required_kwargs, **kwargs)
 
 
+def _rc_cut_rule(string: str):
+    if type(string) is not str:
+        return string
+    chunks = string.split()
+    if chunks[0].startswith('?'):
+        chunks[0] = chunks[0][1:]
+        chunks.insert(0, '?')
+
+    return chunks
+
+
 def main():
     start_processes()
-    run_command = RunCommand(args_maker=_rc_args_maker, args_unpacker=_rc_args_unpacker)
+    run_command = RunCommand(
+        lead_char=None, cut_rule=_rc_cut_rule, args_maker=_rc_args_maker, args_unpacker=_rc_args_unpacker
+    )
 
     for pobj in {processes[x.name] for x in processes.values()}:
         will_run = pobj.process_config.get("auto_start")
@@ -1015,7 +1073,7 @@ def main():
             continue
 
         try:
-            run_command.run_by_str(f"${input_str}", float("inf"))
+            run_command.run_by_str(input_str, float("inf"))
         except CommandException as e:
             print(f"{type(e).__name__}: {e}", file=sys.stderr)
         except Exception as e:
