@@ -1000,7 +1000,8 @@ def main():
     run_command = RunCommand(args_maker=_rc_args_maker, args_unpacker=_rc_args_unpacker)
 
     for pobj in {processes[x.name] for x in processes.values()}:
-        if not pobj.process_config.get("auto_start"):
+        will_run = pobj.process_config.get("auto_start")
+        if not (isinstance(will_run, bool) and will_run):
             continue
         try:
             _start([pobj.name])
